@@ -12,9 +12,9 @@ namespace LaunchDarkly.Client
         private static readonly float longScale = 0xFFFFFFFFFFFFFFFL;
 
         [JsonProperty(PropertyName = "variation")]
-        internal int? Variation { get; private set; }
+        internal int? Variation { get; }
         [JsonProperty(PropertyName = "rollout")]
-        internal Rollout Rollout { get; private set; }
+        internal Rollout Rollout { get; }
 
         [JsonConstructor]
         internal VariationOrRollout(int? variation, Rollout rollout)

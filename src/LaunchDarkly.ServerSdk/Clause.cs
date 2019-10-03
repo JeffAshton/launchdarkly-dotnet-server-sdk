@@ -10,13 +10,13 @@ namespace LaunchDarkly.Client
         private static readonly ILog Log = LogManager.GetLogger(typeof(Clause));
 
         [JsonProperty(PropertyName = "attribute")]
-        internal string Attribute { get; private set; }
+        internal string Attribute { get; }
         [JsonProperty(PropertyName = "op")]
-        internal string Op { get; private set; }
+        internal string Op { get; }
         [JsonProperty(PropertyName = "values")]
-        internal List<JValue> Values { get; private set; }
+        internal List<JValue> Values { get; }
         [JsonProperty(PropertyName = "negate")]
-        internal bool Negate { get; private set; }
+        internal bool Negate { get; }
 
         [JsonConstructor]
         internal Clause(string attribute, string op, List<JValue> values, bool negate)

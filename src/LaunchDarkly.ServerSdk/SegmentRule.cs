@@ -8,11 +8,11 @@ namespace LaunchDarkly.Client
     internal class SegmentRule
     {
         [JsonProperty(PropertyName = "clauses")]
-        internal List<Clause> Clauses { get; private set; }
+        internal List<Clause> Clauses { get; }
         [JsonProperty(PropertyName = "weight")]
-        internal int? Weight { get; private set; }
+        internal int? Weight { get; }
         [JsonProperty(PropertyName = "bucketBy")]
-        internal string BucketBy { get; private set; }
+        internal string BucketBy { get; }
 
         [JsonConstructor]
         internal SegmentRule(List<Clause> clauses, int? weight, string bucketBy)

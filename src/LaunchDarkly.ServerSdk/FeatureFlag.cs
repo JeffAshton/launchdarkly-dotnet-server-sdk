@@ -12,31 +12,31 @@ namespace LaunchDarkly.Client
         private static readonly ILog Log = LogManager.GetLogger(typeof(FeatureFlag));
 
         [JsonProperty(PropertyName = "key")]
-        public string Key { get; private set; }
+        public string Key { get; }
         [JsonProperty(PropertyName = "version")]
         public int Version { get; set; }
         [JsonProperty(PropertyName = "on")]
-        internal bool On { get; private set; }
+        internal bool On { get; }
         [JsonProperty(PropertyName = "prerequisites")]
-        internal List<Prerequisite> Prerequisites { get; private set; }
+        internal List<Prerequisite> Prerequisites { get; }
         [JsonProperty(PropertyName = "salt")]
-        internal string Salt { get; private set; }
+        internal string Salt { get; }
         [JsonProperty(PropertyName = "targets")]
-        internal List<Target> Targets { get; private set; }
+        internal List<Target> Targets { get; }
         [JsonProperty(PropertyName = "rules")]
-        internal List<Rule> Rules { get; private set; }
+        internal List<Rule> Rules { get; }
         [JsonProperty(PropertyName = "fallthrough")]
-        internal VariationOrRollout Fallthrough { get; private set; }
+        internal VariationOrRollout Fallthrough { get; }
         [JsonProperty(PropertyName = "offVariation")]
-        internal int? OffVariation { get; private set; }
+        internal int? OffVariation { get; }
         [JsonProperty(PropertyName = "variations")]
-        internal List<JToken> Variations { get; private set; }
+        internal List<JToken> Variations { get; }
         [JsonProperty(PropertyName = "trackEvents")]
-        public bool TrackEvents { get; private set; }
+        public bool TrackEvents { get; }
         [JsonProperty(PropertyName = "trackEventsFallthrough")]
-        public bool TrackEventsFallthrough { get; private set; }
+        public bool TrackEventsFallthrough { get; }
         [JsonProperty(PropertyName = "debugEventsUntilDate")]
-        public long? DebugEventsUntilDate { get; private set; }
+        public long? DebugEventsUntilDate { get; }
         [JsonProperty(PropertyName = "deleted")]
         public bool Deleted { get; set; }
         [JsonProperty(PropertyName = "clientSide")]
@@ -246,9 +246,9 @@ namespace LaunchDarkly.Client
     internal class Rollout
     {
         [JsonProperty(PropertyName = "variations")]
-        internal List<WeightedVariation> Variations { get; private set; }
+        internal List<WeightedVariation> Variations { get; }
         [JsonProperty(PropertyName = "bucketBy")]
-        internal string BucketBy { get; private set; }
+        internal string BucketBy { get; }
 
         [JsonConstructor]
         internal Rollout(List<WeightedVariation> variations, string bucketBy)
@@ -261,9 +261,9 @@ namespace LaunchDarkly.Client
     internal class WeightedVariation
     {
         [JsonProperty(PropertyName = "variation")]
-        internal int Variation { get; private set; }
+        internal int Variation { get; }
         [JsonProperty(PropertyName = "weight")]
-        internal int Weight { get; private set; }
+        internal int Weight { get; }
 
         [JsonConstructor]
         internal WeightedVariation(int variation, int weight)
@@ -276,9 +276,9 @@ namespace LaunchDarkly.Client
     internal class Target
     {
         [JsonProperty(PropertyName = "values")]
-        internal List<string> Values { get; private set; }
+        internal List<string> Values { get; }
         [JsonProperty(PropertyName = "variation")]
-        internal int Variation { get; private set; }
+        internal int Variation { get; }
 
         [JsonConstructor]
         internal Target(List<string> values, int variation)
@@ -291,9 +291,9 @@ namespace LaunchDarkly.Client
     internal class Prerequisite
     {
         [JsonProperty(PropertyName = "key")]
-        internal string Key { get; private set; }
+        internal string Key { get; }
         [JsonProperty(PropertyName = "variation")]
-        internal int Variation { get; private set; }
+        internal int Variation { get; }
 
         [JsonConstructor]
         internal Prerequisite(string key, int variation)

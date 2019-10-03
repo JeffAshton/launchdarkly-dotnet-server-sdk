@@ -14,9 +14,9 @@ namespace LaunchDarkly.Client
     
     internal class AllData
     {
-        internal IDictionary<string, FeatureFlag> Flags { get; private set; }
+        internal IDictionary<string, FeatureFlag> Flags { get; }
 
-        internal IDictionary<string, Segment> Segments { get; private set; }
+        internal IDictionary<string, Segment> Segments { get; }
 
         [JsonConstructor]
         internal AllData(IDictionary<string, FeatureFlag> flags, IDictionary<string, Segment> segments)

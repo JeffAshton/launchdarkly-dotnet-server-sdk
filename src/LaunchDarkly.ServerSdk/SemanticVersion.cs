@@ -12,11 +12,11 @@ namespace LaunchDarkly.Client
             @"(\-(?<prerel>[0-9A-Za-z\-\.]+))?(\+(?<build>[0-9A-Za-z\-\.]+))?$",
             RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture | RegexOptions.Compiled);
 
-        public int Major { get; private set; }
-        public int Minor { get; private set; }
-        public int Patch { get; private set; }
-        public String Prerelease { get; private set; }
-        public String Build { get; private set; }
+        public int Major { get; }
+        public int Minor { get; }
+        public int Patch { get; }
+        public String Prerelease { get; }
+        public String Build { get; }
 
         public SemanticVersion(int major, int minor, int patch, String prerelease, String build)
         {

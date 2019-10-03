@@ -31,7 +31,7 @@ namespace LaunchDarkly.Client
         /// <seealso cref="WithTtl(TimeSpan)"/>
         /// <seealso cref="WithTtlMillis(double)"/>
         /// <seealso cref="WithTtlSeconds(double)"/>
-        public TimeSpan Ttl { get; private set; }
+        public TimeSpan Ttl { get; }
 
         /// <summary>
         /// True if caching is enabled.
@@ -47,7 +47,7 @@ namespace LaunchDarkly.Client
         /// <summary>
         /// The maximum number of entries that can be held in the cache at a time.
         /// </summary>
-        public int? MaximumEntries { get; private set; }
+        public int? MaximumEntries { get; }
 
         /// <summary>
         /// Returns a parameter object indicating that caching should be disabled.

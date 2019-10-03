@@ -186,7 +186,7 @@ namespace LaunchDarkly.Client
 
         internal class PutData
         {
-            internal AllData Data { get; private set; }
+            internal AllData Data { get; }
 
             [JsonConstructor]
             internal PutData(AllData data)
@@ -197,8 +197,8 @@ namespace LaunchDarkly.Client
 
         internal class PatchData
         {
-            internal string Path { get; private set; }
-            internal JToken Data { get; private set; }
+            internal string Path { get; }
+            internal JToken Data { get; }
 
             [JsonConstructor]
             internal PatchData(string path, JToken data)
@@ -210,8 +210,8 @@ namespace LaunchDarkly.Client
 
         internal class DeleteData
         {
-            internal string Path { get; private set; }
-            internal int Version { get; private set; }
+            internal string Path { get; }
+            internal int Version { get; }
 
             [JsonConstructor]
             internal DeleteData(string path, int version)
