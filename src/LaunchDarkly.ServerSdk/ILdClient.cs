@@ -8,6 +8,10 @@ namespace LaunchDarkly.Client
     /// <summary>
     /// Interface defining the public methods of <see cref="LdClient"/>.
     /// </summary>
+    /// <remarks>
+    /// See also <see cref="ILdClientExtensions"/>, which provides convenience methods that build upon
+    /// this interface.
+    /// </remarks>
 #pragma warning disable 618
     public interface ILdClient : ILdCommonClient
 #pragma warning restore 618
@@ -371,6 +375,7 @@ namespace LaunchDarkly.Client
         /// metrics. This field will also be returned as part of the custom event for Data Export.</param>
         void Track(string name, User user, LdValue data, double metricValue);
 
+        /// <summary>
         /// Tracks that a user performed an event.
         /// </summary>
         /// <remarks>

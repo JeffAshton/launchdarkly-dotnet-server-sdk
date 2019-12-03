@@ -2,6 +2,38 @@
 
 All notable changes to the LaunchDarkly .NET Server-Side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [5.10.0] - 2019-11-12
+### Added:
+- Added `ILdClient` extension methods `EnumVariation` and `EnumVariationDetail`, which convert strings to enums.
+- Added `LaunchDarkly.Logging.ConsoleAdapter` as a convenience for quickly enabling console logging; this is equivalent to `Common.Logging.Simple.ConsoleOutLoggerFactoryAdapter`, but the latter is not available on some platforms.
+- `LdValue` helpers for dealing with array/object values, without having to use an intermediate `List` or `Dictionary`: `BuildArray`, `BuildObject`, `Count`, `Get`.
+- `LdValue.Parse()`. It is also possible to use `Newtonsoft.Json.JsonConvert` to parse or serialize `LdValue`, but since the implementation may change in the future, using the type's own methods is preferable.
+
+### Changed:
+- `EvaluationReason` properties all exist on the base class now, so for instance you do not need to cast to `RuleMatch` to get the `RuleId` property. This is in preparation for a future API change in which `EvaluationReason` will become a struct instead of a base class.
+
+### Fixed:
+- Improved memory usage and performance when processing analytics events: the SDK now encodes event data to JSON directly, instead of creating intermediate objects and serializing them via reflection.
+- `LdValue.Equals()` incorrectly returned true for object (dictionary) values that were not equal.
+
+### Deprecated:
+- `EvaluationReason` subclasses. Use only the base class properties and methods to ensure compatibility with future versions.
+
+## [5.9.0] - 2019-10-07
+### Added:
+- `IUserBuilder.AnonymousOptional` allows setting the `Anonymous` property to `null` (necessary for consistency with other SDKs). See note about this under Fixed.
+- `FileDataSourceBuilder.WithSkipMissingPaths` allows suppressing file-not-found errors in `FileDataSource`, if you have a test setup that may add or remove data files dynamically. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-server-sdk/pull/114)!)
+ 
+### Changed:
+- It is now possible to specify an infinite cache TTL for persistent feature stores by setting the TTL to a negative number, in which case the persistent store will never be read unless the application restarts. Use this mode with caution as described in the comment for `FeatureStoreCacheConfig.Ttl`.
+- Improved the performance of `InMemoryFeatureStore` by using an `ImmutableDictionary` that is replaced under a lock whenever there is an update, so reads do not need a lock. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-server-sdk/pull/111)!)
+- The SDK now has a dependency on `System.Collections.Immutable`. It refers to version 1.2.0 because the SDK does not use any APIs that were added or changed after that point, but if you want to use that package yourself it is best to declare your own dependency rather than relying on this transitive dependency, since there may have been fixes or improvements in other APIs.
+ 
+### Fixed:
+- `IUserBuilder` was incorrectly setting the user's `Anonymous` property to `null` even if it had been explicitly set to `false`. Null and false behave the same in terms of LaunchDarkly's user indexing behavior, but currently it is possible to create a feature flag rule that treats them differently. So `IUserBuilder.Anonymous(false)` now correctly sets it to `false`, just as the deprecated method `UserExtensions.WithAnonymous(false)` would.
+- `LdValue.Convert.Long` was mistakenly converting to an `int` rather than a `long`. (CommonSdk [#32](https://github.com/launchdarkly/dotnet-sdk-common/issues/32))
+- `FileDataSource` could fail to read a file if it noticed the file being modified by another process before the other process had finished writing it. This fix only affects Windows, since in Windows it is not possible to replace a file's contents atomically; in a Unix-like OS, the preferred approach is to create a temporary file and rename it to replace the original file. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-server-sdk/pull/108/files)!)
+
 ## [5.8.0] - 2019-10-01
 ### Added:
 - Added support for upcoming LaunchDarkly experimentation features. See `ILdClient.Track(string, User, LdValue, double)`.
