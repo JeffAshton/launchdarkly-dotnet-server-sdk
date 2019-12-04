@@ -1,6 +1,7 @@
-version: 5.10.0-{build}
+version: 5.10.0.1-{build}
 
 image: Visual Studio 2017
+skip_branch_with_pr: true
 
 configuration: Release
 platform: Any CPU
