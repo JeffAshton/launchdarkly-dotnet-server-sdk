@@ -1,9 +1,9 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Net.Http;
-using Common.Logging;
+using LaunchDarkly.Logging;
+using LaunchDarkly.Sdk.Server.Integrations;
+using LaunchDarkly.Sdk.Server.Interfaces;
 
-namespace LaunchDarkly.Client
+namespace LaunchDarkly.Sdk.Server
 {
     /// <summary>
     /// A mutable object that uses the Builder pattern to specify properties for a <see cref="Configuration"/> object.
@@ -17,183 +17,300 @@ namespace LaunchDarkly.Client
     /// <example>
     /// <code>
     ///     var config = Configuration.Builder("my-sdk-key")
-    ///         .AllAttributesPrivate(true)
-    ///         .EventCapacity(1000)
+    ///         .StartWaitTime(TimeSpan.FromSeconds(5))
+    ///         .Events(Components.SendEvents().Capacity(50000))
     ///         .Build();
     /// </code>
     /// </example>
-    public interface IConfigurationBuilder
+    public sealed class ConfigurationBuilder
     {
+        #region Internal properties
+
+        internal static readonly TimeSpan DefaultStartWaitTime = TimeSpan.FromSeconds(10);
+
+        // Let's try to keep these properties and methods alphabetical so they're easy to find. Note that they
+        // are internal rather than private so that they can be read by the Configuration constructor.
+        internal IBigSegmentsConfigurationFactory _bigSegmentsConfigurationFactory = null;
+        internal IDataSourceFactory _dataSourceFactory = null;
+        internal IDataStoreFactory _dataStoreFactory = null;
+        internal bool _diagnosticOptOut = false;
+        internal IEventProcessorFactory _eventProcessorFactory = null;
+        internal IHttpConfigurationFactory _httpConfigurationFactory = null;
+        internal ILoggingConfigurationFactory _loggingConfigurationFactory = null;
+        internal bool _offline = false;
+        internal string _sdkKey;
+        internal ServiceEndpointsBuilder _serviceEndpointsBuilder = null;
+        internal TimeSpan _startWaitTime = DefaultStartWaitTime;
+
+        #endregion
+
+        #region Internal constructors
+
+        internal ConfigurationBuilder(string sdkKey)
+        {
+            _sdkKey = sdkKey;
+        }
+
+        internal ConfigurationBuilder(Configuration copyFrom)
+        {
+            _bigSegmentsConfigurationFactory = copyFrom.BigSegmentsConfigurationFactory;
+            _dataSourceFactory = copyFrom.DataSourceFactory;
+            _dataStoreFactory = copyFrom.DataStoreFactory;
+            _diagnosticOptOut = copyFrom.DiagnosticOptOut;
+            _eventProcessorFactory = copyFrom.EventProcessorFactory;
+            _httpConfigurationFactory = copyFrom.HttpConfigurationFactory;
+            _loggingConfigurationFactory = copyFrom.LoggingConfigurationFactory;
+            _offline = copyFrom.Offline;
+            _sdkKey = copyFrom.SdkKey;
+            _serviceEndpointsBuilder = new ServiceEndpointsBuilder(copyFrom.ServiceEndpoints);
+            _startWaitTime = copyFrom.StartWaitTime;
+        }
+
+        #endregion
+
+        #region Public methods
+
         /// <summary>
         /// Creates a <see cref="Configuration"/> based on the properties that have been set on the builder.
         /// Modifying the builder after this point does not affect the returned <see cref="Configuration"/>.
         /// </summary>
         /// <returns>the configured <c>Configuration</c> object</returns>
-        Configuration Build();
+        public Configuration Build()
+        {
+            return new Configuration(this);
+        }
 
         /// <summary>
-        /// Sets whether or not user attributes (other than the key) should be private (not sent to
-        /// the LaunchDarkly server).
+        /// Sets the configuration of the SDK's Big Segments feature.
         /// </summary>
         /// <remarks>
-        /// If this is true, all of the user attributes will be private, not just the attributes specified with the
-        /// <c>AndPrivate...</c> methods on the <see cref="User"/> object. By default, this is false.
+        /// <para>
+        /// "Big Segments" are a specific type of user segments. For more information, read the LaunchDarkly
+        /// documentation about user segments: https://docs.launchdarkly.com/home/users/segments
+        /// </para>
+        /// <para>
+        /// If you are using this feature, you will normally specify a database implementation that matches how
+        /// the LaunchDarkly Relay Proxy is configured, since the Relay Proxy manages the Big Segment data.
+        /// </para>
+        /// <para>
+        /// By default, there is no implementation and Big Segments cannot be evaluated. In this case, any flag
+        /// evaluation that references a Big Segment will behave as if no users are included in any Big
+        /// Segments, and the <see cref="EvaluationReason"/> associated with any such flag evaluation will have
+        /// a <see cref="EvaluationReason.BigSegmentsStatus"/> of <see cref="BigSegmentsStatus.NotConfigured"/>.
+        /// </para>
         /// </remarks>
-        /// <param name="allAttributesPrivate">true if all attributes should be private</param>
+        /// <example>
+        /// <code>
+        ///     // This example uses the Redis integration
+        ///     var config = Configuration.Builder(sdkKey)
+        ///         .BigSegments(Components.BigSegments(Redis.DataStore().Prefix("app1"))
+        ///             .UserCacheSize(2000))
+        ///         .Build();
+        /// </code>
+        /// </example>
+        /// <param name="bigSegmentsConfigurationFactory">a configuration factory object returned by
+        /// <see cref="Components.BigSegments(IBigSegmentStoreFactory)"/></param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder AllAttributesPrivate(bool allAttributesPrivate);
+        public ConfigurationBuilder BigSegments(IBigSegmentsConfigurationFactory bigSegmentsConfigurationFactory)
+        {
+            _bigSegmentsConfigurationFactory = bigSegmentsConfigurationFactory;
+            return this;
+        }
 
         /// <summary>
-        /// Sets the base URI of the LaunchDarkly server.
-        /// </summary>
-        /// <param name="baseUri">the base URI</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder BaseUri(Uri baseUri);
-
-        /// <summary>
-        /// Sets the capacity of the events buffer.
+        /// Sets the implementation of the component that receives feature flag data from LaunchDarkly,
+        /// using a factory object.
         /// </summary>
         /// <remarks>
-        /// The client buffers up to this many events in memory before flushing. If the capacity is exceeded
-        /// before the buffer is flushed, events will be discarded. Increasing the capacity means that events
-        /// are less likely to be discarded, at the cost of consuming more memory.
+        /// <para>
+        /// Depending on the implementation, the factory may be a builder that allows you to set other
+        /// configuration options as well.
+        /// </para>
+        /// <para>
+        /// The default is <see cref="Components.StreamingDataSource"/>. You may instead use
+        /// <see cref="Components.PollingDataSource"/>, <see cref="Components.ExternalUpdatesOnly"/>, or a
+        /// test fixture such as <see cref="FileData.DataSource"/>. See those methods for
+        /// details on how to configure them.
+        /// </para>
         /// </remarks>
-        /// <param name="eventCapacity">the capacity of the events buffer</param>
+        /// <param name="dataSourceFactory">the factory object</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder EventCapacity(int eventCapacity);
+        public ConfigurationBuilder DataSource(IDataSourceFactory dataSourceFactory)
+        {
+            _dataSourceFactory = dataSourceFactory;
+            return this;
+        }
 
         /// <summary>
-        /// Sets the time between flushes of the event buffer.
-        /// </summary>
-        /// <remarks>
-        /// Decreasing the flush interval means that the event buffer is less likely to reach capacity. The
-        /// default value is 5 seconds.
-        /// </remarks>
-        /// <param name="eventflushInterval">the flush interval</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder EventFlushInterval(TimeSpan eventflushInterval);
-
-        /// <summary>
-        /// Sets the implementation of <see cref="IEventProcessor"/> to be used for processing analytics events.
-        /// </summary>
-        /// <remarks>
-        /// The default is <see cref="Components.DefaultEventProcessor"/>, but you may choose to use a custom
-        /// implementation (for instance, a test fixture).
-        /// </remarks>
-        /// <param name="eventProcessorFactory">the factory object</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder EventProcessorFactory(IEventProcessorFactory eventProcessorFactory);
-        
-        /// <summary>
-        /// Sets the base URL of the LaunchDarkly analytics event server.
-        /// </summary>
-        /// <param name="eventsUri">the events URI</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder EventsUri(Uri eventsUri);
-
-        /// <summary>
-        /// Sets the implementation of <see cref="IFeatureStore"/> to be used for holding feature flags
+        /// Sets the data store implementation to be used for holding feature flags
         /// and related data received from LaunchDarkly.
         /// </summary>
         /// <remarks>
-        /// The default is <see cref="Components.InMemoryFeatureStore"/>, but you may choose to use a custom
-        /// implementation.
+        /// <para>
+        /// The default is <see cref="Components.InMemoryDataStore"/>, but you may choose to use a custom
+        /// implementation such as a database integration. For the latter, you will normally
+        /// use <see cref="Components.PersistentDataStore(IPersistentDataStoreFactory)"/> in
+        /// conjunction with some specific type for that integration.
+        /// </para>
+        /// <para>
+        /// This is specified as a factory because the SDK normally manages the lifecycle of the
+        /// data store; it will create an instance from the factory when an <see cref="LdClient"/>
+        /// is created, and dispose of that instance when disposing of the client.
+        /// </para>
         /// </remarks>
-        /// <param name="featureStoreFactory">the factory object</param>
+        /// <param name="dataStoreFactory">the factory object</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder FeatureStoreFactory(IFeatureStoreFactory featureStoreFactory);
+        public ConfigurationBuilder DataStore(IDataStoreFactory dataStoreFactory)
+        {
+            _dataStoreFactory = dataStoreFactory;
+            return this;
+        }
 
         /// <summary>
-        /// Sets the object to be used for sending HTTP requests. This is exposed for testing purposes.
-        /// </summary>
-        /// <param name="httpClientHandler">the <c>HttpClientHandler</c> to use</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder HttpClientHandler(HttpClientHandler httpClientHandler);
-
-        /// <summary>
-        /// Sets the connection timeout. The default value is 10 seconds.
-        /// </summary>
-        /// <param name="httpClientTimeout">the connection timeout</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder HttpClientTimeout(TimeSpan httpClientTimeout);
-
-        /// <summary>
-        /// Sets whether to include full user details in every analytics event.
+        ///   Set to true to opt out of sending diagnostic events.
         /// </summary>
         /// <remarks>
-        /// The default is false: events will only include the user key, except for one "index" event that
-        /// provides the full details for the user.
+        ///   <para>
+        ///     Unless the diagnosticOptOut field is set to true, the client will send some
+        ///     diagnostics data to the LaunchDarkly servers in order to assist in the development
+        ///     of future SDK improvements. These diagnostics consist of an initial payload
+        ///     containing some details of SDK in use, the SDK's configuration, and the platform the
+        ///     SDK is being run on, as well as payloads sent periodically with information on
+        ///     irregular occurrences such as dropped events.
+        ///   </para>
         /// </remarks>
-        /// <param name="inlineUsersInEvents">true or false</param>
+        /// <param name="diagnosticOptOut">true to disable diagnostic events</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder InlineUsersInEvents(bool inlineUsersInEvents);
+        public ConfigurationBuilder DiagnosticOptOut(bool diagnosticOptOut)
+        {
+            _diagnosticOptOut = diagnosticOptOut;
+            return this;
+        }
 
         /// <summary>
-        /// Sets whether or not the streaming API should be used to receive flag updates.
+        /// Sets the implementation of the component that processes analytics events.
         /// </summary>
         /// <remarks>
-        /// This is true by default. Streaming should only be disabled on the advice of LaunchDarkly support.
+        /// The default is <see cref="Components.SendEvents"/>, but you may choose to set it to a customized
+        /// <see cref="EventProcessorBuilder"/>, a custom implementation (for instance, a test fixture), or
+        /// disable events with <see cref="Components.NoEvents"/>.
         /// </remarks>
-        /// <param name="isStreamingEnabled">true if the streaming API should be used</param>
+        /// <param name="eventProcessorFactory">a builder/factory object for event configuration</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder IsStreamingEnabled(bool isStreamingEnabled);
+        public ConfigurationBuilder Events(IEventProcessorFactory eventProcessorFactory)
+        {
+            _eventProcessorFactory = eventProcessorFactory;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the SDK's networking configuration, using a factory object. This object is normally a
+        /// configuration builder obtained from <see cref="Components.HttpConfiguration()"/>, which has
+        /// methods for setting individual HTTP-related properties.
+        /// </summary>
+        /// <param name="httpConfigurationFactory">a builder/factory object for HTTP configuration</param>
+        /// <returns>the same builder</returns>
+        public ConfigurationBuilder Http(IHttpConfigurationFactory httpConfigurationFactory)
+        {
+            _httpConfigurationFactory = httpConfigurationFactory;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the SDK's logging configuration, using a factory object.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This object is normally a configuration builder obtained from <see cref="Components.Logging()"/>
+        /// which has methods for setting individual logging-related properties. As a shortcut for disabling
+        /// logging, you may use <see cref="Components.NoLogging"/> instead. If all you want to do is to set
+        /// the basic logging destination, and you do not need to set other logging properties, you can use
+        /// <see cref="Logging(ILogAdapter)"/> instead.
+        /// </para>
+        /// <para>
+        /// For more about how logging works in the SDK, see the <a href="https://docs.launchdarkly.com/sdk/features/logging#net">SDK
+        /// SDK reference guide</a>.
+        /// </para>
+        /// </remarks>
+        /// <example>
+        ///     var config = Configuration.Builder("my-sdk-key")
+        ///         .Logging(Components.Logging().Level(LogLevel.Warn)))
+        ///         .Build();
+        /// </example>
+        /// <param name="loggingConfigurationFactory">the factory object</param>
+        /// <returns>the same builder</returns>
+        /// <seealso cref="Components.Logging()" />
+        /// <seealso cref="Components.Logging(ILogAdapter) "/>
+        /// <seealso cref="Components.NoLogging" />
+        /// <seealso cref="Logging(ILogAdapter)"/>
+        public ConfigurationBuilder Logging(ILoggingConfigurationFactory loggingConfigurationFactory)
+        {
+            _loggingConfigurationFactory = loggingConfigurationFactory;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the SDK's logging destination.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This is a shortcut for <c>Logging(Components.Logging(logAdapter))</c>. You can use it when you
+        /// only want to specify the basic logging destination, and do not need to set other log properties.
+        /// </para>
+        /// <para>
+        /// For more about how logging works in the SDK, see the <a href="https://docs.launchdarkly.com/sdk/features/logging#net">SDK
+        /// SDK reference guide</a>.
+        /// </para>
+        /// </remarks>
+        /// <example>
+        ///     var config = Configuration.Builder("my-sdk-key")
+        ///         .Logging(Logs.ToWriter(Console.Out))
+        ///         .Build();
+        /// </example>
+        /// <param name="logAdapter">an <c>ILogAdapter</c> for the desired logging implementation</param>
+        /// <returns>the same builder</returns>
+        public ConfigurationBuilder Logging(ILogAdapter logAdapter) =>
+            Logging(Components.Logging(logAdapter));
 
         /// <summary>
         /// Sets whether or not this client is offline. If true, no calls to Launchdarkly will be made.
         /// </summary>
         /// <param name="offline">true if the client should remain offline</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder Offline(bool offline);
-
-        /// <summary>
-        /// Sets the polling interval (when streaming is disabled).
-        /// </summary>
-        /// <remarks>
-        /// Values less than the default of 30 seconds will be changed to the default.
-        /// </remarks>
-        /// <param name="pollingInterval">the rule update polling interval</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder PollingInterval(TimeSpan pollingInterval);
-
-        /// <summary>
-        /// Marks an attribute name as private.
-        /// </summary>
-        /// <remarks>
-        /// Any users sent to LaunchDarkly with this configuration active will have attributes with this name
-        /// removed, even if you did not use the <c>AndPrivate...</c> methods on the <see cref="User"/> object.
-        /// You may call this method repeatedly to mark multiple attributes as private.
-        /// </remarks>
-        /// <param name="privateAtributeName">the attribute name</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder PrivateAttribute(string privateAtributeName);
-
-        /// <summary>
-        /// Sets the timeout when reading data from the streaming connection.
-        /// </summary>
-        /// <remarks>
-        /// The default value is 5 minutes.
-        /// </remarks>
-        /// <param name="readTimeout">the read timeout</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder ReadTimeout(TimeSpan readTimeout);
-
-        /// <summary>
-        /// Sets the reconnect base time for the streaming connection.
-        /// </summary>
-        /// <remarks>
-        /// The streaming connection uses an exponential backoff algorithm (with jitter) for reconnects, but
-        /// will start the backoff with a value near the value specified here. The default value is 1 second.
-        /// </remarks>
-        /// <param name="reconnectTime">the reconnect time base value</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder ReconnectTime(TimeSpan reconnectTime);
+        public ConfigurationBuilder Offline(bool offline)
+        {
+            _offline = offline;
+            return this;
+        }
 
         /// <summary>
         /// Sets the SDK key for your LaunchDarkly environment.
         /// </summary>
         /// <param name="sdkKey">the SDK key</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder SdkKey(string sdkKey);
+        public ConfigurationBuilder SdkKey(string sdkKey)
+        {
+            _sdkKey = sdkKey;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets the SDK's service URIs, using a configuration builder obtained from
+        /// <see cref="Components.ServiceEndpoints"/>.
+        /// </summary>
+        /// <remarks>
+        /// This overwrites any previous options set with <see cref="ServiceEndpoints(ServiceEndpointsBuilder)"/>.
+        /// If you want to set multiple options, set them on the same <see cref="ServiceEndpointsBuilder"/>.
+        /// </remarks>
+        /// <param name="serviceEndpointsBuilder">the subconfiguration builder object</param>
+        /// <returns>the main configuration builder</returns>
+        /// <seealso cref="Components.ServiceEndpoints"/>
+        /// <seealso cref="ServiceEndpointsBuilder"/>
+        public ConfigurationBuilder ServiceEndpoints(ServiceEndpointsBuilder serviceEndpointsBuilder)
+        {
+            _serviceEndpointsBuilder = serviceEndpointsBuilder;
+            return this;
+        }
 
         /// <summary>
         /// Sets how long the client constructor will block awaiting a successful connection to
@@ -205,279 +322,12 @@ namespace LaunchDarkly.Client
         /// </remarks>
         /// <param name="startWaitTime">the length of time to wait</param>
         /// <returns>the same builder</returns>
-        IConfigurationBuilder StartWaitTime(TimeSpan startWaitTime);
-
-        /// <summary>
-        /// Sets the base URI of the LaunchDarkly streaming server.
-        /// </summary>
-        /// <param name="streamUri">the stream URI</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder StreamUri(Uri streamUri);
-
-        /// <summary>
-        /// Sets the implementation of <see cref="IUpdateProcessor"/> to be used for receiving feature flag data.
-        /// </summary>
-        /// <remarks>
-        /// The default is <see cref="Components.DefaultUpdateProcessor"/>, but you may choose to use a custom
-        /// implementation (for instance, a test fixture).
-        /// </remarks>
-        /// <param name="updateProcessorFactory">the factory object</param>
-        IConfigurationBuilder UpdateProcessorFactory(IUpdateProcessorFactory updateProcessorFactory);
-
-        /// <summary>
-        /// Sets whether this client should use the <a href="https://docs.launchdarkly.com/docs/the-relay-proxy">LaunchDarkly
-        /// relay</a> in daemon mode, instead of subscribing to the streaming or polling API.
-        /// </summary>
-        /// <remarks>
-        /// For this to work, you must also be using a
-        /// <a href="https://docs.launchdarkly.com/docs/using-a-persistent-feature-store">persistent feature store</a>.
-        /// </remarks>
-        /// <param name="useLdd">true to use the relay in daemon mode; false to use streaming or polling</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder UseLdd(bool useLdd);
-
-        /// <summary>
-        /// Sets the number of user keys that the event processor can remember at any one time.
-        /// </summary>
-        /// <remarks>
-        /// The event processor keeps track of recently seen user keys so that duplicate user details will not
-        /// be sent in analytics events.
-        /// </remarks>
-        /// <param name="userKeysCapacity">the user key cache capacity</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder UserKeysCapacity(int userKeysCapacity);
-
-        /// <summary>
-        /// Sets the interval at which the event processor will clear its cache of known user keys.
-        /// </summary>
-        /// <remarks>
-        /// The default value is five minutes.
-        /// </remarks>
-        /// <param name="userKeysFlushInterval">the flush interval</param>
-        /// <returns>the same builder</returns>
-        IConfigurationBuilder UserKeysFlushInterval(TimeSpan userKeysFlushInterval);
-    }
-
-    class ConfigurationBuilder : IConfigurationBuilder
-    {
-        private static readonly ILog Log = LogManager.GetLogger(typeof(ConfigurationBuilder));
-
-        internal bool _allAttributesPrivate = false;
-        internal Uri _baseUri = Configuration.DefaultUri;
-        internal int _eventCapacity = Configuration.DefaultEventQueueCapacity;
-        internal TimeSpan _eventFlushInterval = Configuration.DefaultEventQueueFrequency;
-        internal IEventProcessorFactory _eventProcessorFactory = null;
-        internal Uri _eventsUri = Configuration.DefaultEventsUri;
-        internal IFeatureStoreFactory _featureStoreFactory = null;
-        internal HttpClientHandler _httpClientHandler = new HttpClientHandler();
-        internal TimeSpan _httpClientTimeout = Configuration.DefaultHttpClientTimeout;
-        internal bool _inlineUsersInEvents = false;
-        internal bool _isStreamingEnabled = true;
-        internal bool _offline = false;
-        internal TimeSpan _pollingInterval = Configuration.DefaultPollingInterval;
-        internal ISet<string> _privateAttributeNames = null;
-        internal TimeSpan _readTimeout = Configuration.DefaultReadTimeout;
-        internal TimeSpan _reconnectTime = Configuration.DefaultReconnectTime;
-        internal string _sdkKey;
-        internal TimeSpan _startWaitTime = Configuration.DefaultStartWaitTime;
-        internal Uri _streamUri = Configuration.DefaultStreamUri;
-        internal IUpdateProcessorFactory _updateProcessorFactory = null;
-        internal bool _useLdd = false;
-        internal int _userKeysCapacity = Configuration.DefaultUserKeysCapacity;
-        internal TimeSpan _userKeysFlushInterval = Configuration.DefaultUserKeysFlushInterval;
-        internal int _eventSamplingInterval = 0;     // deprecated Configuration property, settable only by copying
-        internal IFeatureStore _featureStore = null; // deprecated Configuration property, settable only by copying
-
-        public ConfigurationBuilder(string sdkKey)
-        {
-            _sdkKey = sdkKey;
-        }
-
-        public ConfigurationBuilder(Configuration copyFrom)
-        {
-            _allAttributesPrivate = copyFrom.AllAttributesPrivate;
-            _baseUri = copyFrom.BaseUri;
-            _eventCapacity = copyFrom.EventCapacity;
-            _eventFlushInterval = copyFrom.EventFlushInterval;
-            _eventProcessorFactory = copyFrom.EventProcessorFactory;
-#pragma warning disable 618
-            _eventSamplingInterval = copyFrom.EventSamplingInterval;
-#pragma warning restore 618
-            _eventsUri = copyFrom.EventsUri;
-            _featureStore = copyFrom.FeatureStore;
-            _featureStoreFactory = copyFrom.FeatureStoreFactory;
-            _httpClientHandler = copyFrom.HttpClientHandler;
-            _httpClientTimeout = copyFrom.HttpClientTimeout;
-            _inlineUsersInEvents = copyFrom.InlineUsersInEvents;
-            _isStreamingEnabled = copyFrom.IsStreamingEnabled;
-            _offline = copyFrom.Offline;
-            _pollingInterval = copyFrom.PollingInterval;
-            _privateAttributeNames = copyFrom.PrivateAttributeNames is null ? null :
-                new HashSet<string>(copyFrom.PrivateAttributeNames);
-            _readTimeout = copyFrom.ReadTimeout;
-            _reconnectTime = copyFrom.ReconnectTime;
-            _sdkKey = copyFrom.SdkKey;
-            _startWaitTime = copyFrom.StartWaitTime;
-            _streamUri = copyFrom.StreamUri;
-            _updateProcessorFactory = copyFrom.UpdateProcessorFactory;
-            _useLdd = copyFrom.UseLdd;
-            _userKeysCapacity = copyFrom.UserKeysCapacity;
-            _userKeysFlushInterval = copyFrom.UserKeysFlushInterval;
-        }
-
-        public Configuration Build()
-        {
-            return new Configuration(this);
-        }
-
-        public IConfigurationBuilder AllAttributesPrivate(bool allAttributesPrivate)
-        {
-            _allAttributesPrivate = allAttributesPrivate;
-            return this;
-        }
-
-        public IConfigurationBuilder BaseUri(Uri baseUri)
-        {
-            _baseUri = baseUri;
-            return this;
-        }
-
-        public IConfigurationBuilder EventCapacity(int eventCapacity)
-        {
-            _eventCapacity = eventCapacity;
-            return this;
-        }
-
-        public IConfigurationBuilder EventFlushInterval(TimeSpan eventFlushInterval)
-        {
-            _eventFlushInterval = eventFlushInterval;
-            return this;
-        }
-
-        public IConfigurationBuilder EventProcessorFactory(IEventProcessorFactory eventProcessorFactory)
-        {
-            _eventProcessorFactory = eventProcessorFactory;
-            return this;
-        }
-        
-        public IConfigurationBuilder EventsUri(Uri eventsUri)
-        {
-            _eventsUri = eventsUri;
-            return this;
-        }
-
-        public IConfigurationBuilder FeatureStoreFactory(IFeatureStoreFactory featureStoreFactory)
-        {
-            _featureStoreFactory = featureStoreFactory;
-            return this;
-        }
-
-        public IConfigurationBuilder HttpClientHandler(HttpClientHandler httpClientHandler)
-        {
-            _httpClientHandler = httpClientHandler;
-            return this;
-        }
-
-        public IConfigurationBuilder HttpClientTimeout(TimeSpan httpClientTimeout)
-        {
-            _httpClientTimeout = httpClientTimeout;
-            return this;
-        }
-
-        public IConfigurationBuilder InlineUsersInEvents(bool inlineUsersInEvents)
-        {
-            _inlineUsersInEvents = inlineUsersInEvents;
-            return this;
-        }
-
-        public IConfigurationBuilder IsStreamingEnabled(bool isStreamingEnabled)
-        {
-            _isStreamingEnabled = isStreamingEnabled;
-            return this;
-        }
-
-        public IConfigurationBuilder Offline(bool offline)
-        {
-            _offline = offline;
-            return this;
-        }
-
-        public IConfigurationBuilder PollingInterval(TimeSpan pollingInterval)
-        {
-            if (pollingInterval.CompareTo(Configuration.DefaultPollingInterval) < 0)
-            {
-                Log.Warn("PollingInterval cannot be less than the default of 30 seconds.");
-                _pollingInterval = Configuration.DefaultPollingInterval;
-            }
-            else
-            {
-                _pollingInterval = pollingInterval;
-            }
-            return this;
-        }
-
-        public IConfigurationBuilder PrivateAttribute(string privateAttributeName)
-        {
-            if (_privateAttributeNames is null)
-            {
-                _privateAttributeNames = new HashSet<string>();
-            }
-            _privateAttributeNames.Add(privateAttributeName);
-            return this;
-        }
-
-        public IConfigurationBuilder ReadTimeout(TimeSpan readTimeout)
-        {
-            _readTimeout = readTimeout;
-            return this;
-        }
-
-        public IConfigurationBuilder ReconnectTime(TimeSpan reconnectTime)
-        {
-            _reconnectTime = reconnectTime;
-            return this;
-        }
-
-        public IConfigurationBuilder SdkKey(string sdkKey)
-        {
-            _sdkKey = sdkKey;
-            return this;
-        }
-
-        public IConfigurationBuilder StartWaitTime(TimeSpan startWaitTime)
+        public ConfigurationBuilder StartWaitTime(TimeSpan startWaitTime)
         {
             _startWaitTime = startWaitTime;
             return this;
         }
 
-        public IConfigurationBuilder StreamUri(Uri streamUri)
-        {
-            _streamUri = streamUri;
-            return this;
-        }
-
-        public IConfigurationBuilder UpdateProcessorFactory(IUpdateProcessorFactory updateProcessorFactory)
-        {
-            _updateProcessorFactory = updateProcessorFactory;
-            return this;
-        }
-
-        public IConfigurationBuilder UseLdd(bool useLdd)
-        {
-            _useLdd = useLdd;
-            return this;
-        }
-
-        public IConfigurationBuilder UserKeysCapacity(int userKeysCapacity)
-        {
-            _userKeysCapacity = userKeysCapacity;
-            return this;
-        }
-
-        public IConfigurationBuilder UserKeysFlushInterval(TimeSpan userKeysFlushInterval)
-        {
-            _userKeysFlushInterval = userKeysFlushInterval;
-            return this;
-        }
+        #endregion
     }
 }

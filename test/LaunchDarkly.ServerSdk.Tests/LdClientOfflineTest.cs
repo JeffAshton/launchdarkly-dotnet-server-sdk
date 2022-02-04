@@ -1,46 +1,50 @@
-﻿using System.Collections.Generic;
-using LaunchDarkly.Client;
-using Newtonsoft.Json.Linq;
+﻿using LaunchDarkly.Logging;
+using LaunchDarkly.Sdk.Server.Internal;
+using LaunchDarkly.Sdk.Server.Internal.DataStores;
+using LaunchDarkly.Sdk.Server.Internal.Model;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace LaunchDarkly.Tests
+namespace LaunchDarkly.Sdk.Server
 {
-    public class LdClientOfflineTest
+    public class LdClientOfflineTest : BaseTest
     {
+        public LdClientOfflineTest(ITestOutputHelper testOutput) : base(testOutput) { }
+
         [Fact]
-        public void OfflineClientHasNullUpdateProcessor()
+        public void OfflineClientHasNullDataSource()
         {
-            var config = Configuration.Builder("SDK_KEY").Offline(true).Build();
+            var config = BasicConfig().Offline(true).Build();
             using (var client = new LdClient(config))
             {
-                Assert.IsType<NullUpdateProcessor>(client._updateProcessor);
+                Assert.IsType<ComponentsImpl.NullDataSource>(client._dataSource);
             }
         }
 
         [Fact]
-        public void LddModeClientHasNullEventProcessor()
+        public void OfflineClientHasNullEventProcessor()
         {
-            var config = Configuration.Builder("SDK_KEY").Offline(true).Build();
+            var config = BasicConfig().Offline(true).Build();
             using (var client = new LdClient(config))
             {
-                Assert.IsType<NullEventProcessor>(client._eventProcessor);
+                Assert.IsType<ComponentsImpl.NullEventProcessor>(client._eventProcessor);
             }
         }
 
         [Fact]
         public void OfflineClientIsInitialized()
         {
-            var config = Configuration.Builder("SDK_KEY").Offline(true).Build();
+            var config = BasicConfig().Offline(true).Build();
             using (var client = new LdClient(config))
             {
-                Assert.True(client.Initialized());
+                Assert.True(client.Initialized);
             }
         }
 
         [Fact]
         public void OfflineReturnsDefaultValue()
         {
-            var config = Configuration.Builder("SDK_KEY").Offline(true).Build();
+            var config = BasicConfig().Offline(true).Build();
             using (var client = new LdClient(config))
             {
                 Assert.Equal("x", client.StringVariation("key", User.WithKey("user"), "x"));
@@ -48,25 +52,35 @@ namespace LaunchDarkly.Tests
         }
 
         [Fact]
-        public void OfflineClientGetsFlagFromFeatureStore()
+        public void OfflineClientGetsFlagFromDataStore()
         {
-            var featureStore = TestUtils.InMemoryFeatureStore();
-            featureStore.Upsert(VersionedDataKind.Features,
-                new FeatureFlagBuilder("key").OffWithValue(new JValue(true)).Build());
-            var config = Configuration.Builder("SDK_KEY")
+            var dataStore = new InMemoryDataStore();
+            TestUtils.UpsertFlag(dataStore,
+                new FeatureFlagBuilder("key").OffWithValue(LdValue.Of(true)).Build());
+            var config = BasicConfig()
                 .Offline(true)
-                .FeatureStoreFactory(TestUtils.SpecificFeatureStore(featureStore))
+                .DataStore(dataStore.AsSingletonFactory())
                 .Build();
             using (var client = new LdClient(config))
             {
-                Assert.Equal(true, client.BoolVariation("key", User.WithKey("user"), false));
+                Assert.True(client.BoolVariation("key", User.WithKey("user"), false));
+            }
+        }
+
+        [Fact]
+        public void OfflineClientStartupMessage()
+        {
+            var config = BasicConfig().Offline(true).Build();
+            using (var client = new LdClient(config))
+            {
+                AssertLogMessage(true, LogLevel.Info, "Starting LaunchDarkly client in offline mode");
             }
         }
 
         [Fact]
         public void TestSecureModeHash()
         {
-            var config = Configuration.Builder("secret").Offline(true).Build();
+            var config = BasicConfig().SdkKey("secret").Offline(true).Build();
             using (var client = new LdClient(config))
             {
                 Assert.Equal("aa747c502a898200f9e4fa21bac68136f886a0e27aec70ba06daf2e2a5cb5597",

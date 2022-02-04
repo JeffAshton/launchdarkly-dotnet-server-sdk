@@ -1,12 +1,19 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Reflection;
 using System.Security.Cryptography;
-using Common.Logging;
-using Newtonsoft.Json.Linq;
-using LaunchDarkly.Common;
+using LaunchDarkly.Logging;
+using LaunchDarkly.Sdk.Internal;
+using LaunchDarkly.Sdk.Server.Interfaces;
+using LaunchDarkly.Sdk.Server.Internal;
+using LaunchDarkly.Sdk.Server.Internal.BigSegments;
+using LaunchDarkly.Sdk.Server.Internal.DataSources;
+using LaunchDarkly.Sdk.Server.Internal.DataStores;
+using LaunchDarkly.Sdk.Server.Internal.Evaluation;
+using LaunchDarkly.Sdk.Server.Internal.Events;
+using LaunchDarkly.Sdk.Server.Internal.Model;
 
-namespace LaunchDarkly.Client
+using static LaunchDarkly.Sdk.Server.Interfaces.DataStoreTypes;
+
+namespace LaunchDarkly.Sdk.Server
 {
     /// <summary>
     /// A client for the LaunchDarkly API. Client instances are thread-safe. Applications should instantiate
@@ -14,74 +21,174 @@ namespace LaunchDarkly.Client
     /// </summary>
     public sealed class LdClient : IDisposable, ILdClient
     {
-        private static readonly ILog Log = LogManager.GetLogger(typeof(LdClient));
+        #region Private fields
 
+        private readonly IBigSegmentStoreStatusProvider _bigSegmentStoreStatusProvider;
+        private readonly BigSegmentStoreWrapper _bigSegmentStoreWrapper;
         private readonly Configuration _configuration;
         internal readonly IEventProcessor _eventProcessor;
-        private readonly IFeatureStore _featureStore;
-        internal readonly IUpdateProcessor _updateProcessor;
-        private bool _shouldDisposeEventProcessor;
-        private bool _shouldDisposeFeatureStore;
+        private readonly IDataStore _dataStore;
+        internal readonly IDataSource _dataSource;
+        private readonly DataSourceStatusProviderImpl _dataSourceStatusProvider;
+        private readonly DataStoreStatusProviderImpl _dataStoreStatusProvider;
+        private readonly IFlagTracker _flagTracker;
+        internal readonly Evaluator _evaluator;
+        private readonly Logger _log;
+        private readonly Logger _evalLog;
+
+        #endregion
+
+        #region Public properties
+
+        /// <inheritdoc/>
+        public IBigSegmentStoreStatusProvider BigSegmentStoreStatusProvider => _bigSegmentStoreStatusProvider;
+
+        /// <inheritdoc/>
+        public IDataSourceStatusProvider DataSourceStatusProvider => _dataSourceStatusProvider;
+
+        /// <inheritdoc/>
+        public IDataStoreStatusProvider DataStoreStatusProvider => _dataStoreStatusProvider;
+
+        /// <inheritdoc/>
+        public IFlagTracker FlagTracker => _flagTracker;
+
+        /// <inheritdoc/>
+        public bool Initialized => _dataSource.Initialized;
+
+        /// <inheritdoc/>
+        public Version Version => AssemblyVersions.GetAssemblyVersionForType(typeof(LdClient));
+
+        #endregion
+
+        #region Public constructors
 
         /// <summary>
-        /// Deprecated; please use <see cref="IConfigurationBuilder.EventProcessorFactory(IEventProcessorFactory)"/>
-        /// instead if you want to specify a custom analytics event processor.
+        /// Creates a new client to connect to LaunchDarkly with a custom configuration.
         /// </summary>
-        /// <param name="config">a client configuration object</param>
-        /// <param name="eventProcessor">an event processor</param>
-        [Obsolete("Deprecated, please use Configuration.WithEventProcessorFactory")]
-        public LdClient(Configuration config, IEventProcessor eventProcessor)
+        /// <remarks>
+        /// <para>
+        /// Applications should instantiate a single instance for the lifetime of the application. In
+        /// unusual cases where an application needs to evaluate feature flags from different LaunchDarkly
+        /// projects or environments, you may create multiple clients, but they should still be retained
+        /// for the lifetime of the application rather than created per request or per thread.
+        /// </para>
+        /// <para>
+        /// Normally, the client will begin attempting to connect to LaunchDarkly as soon as you call the
+        /// constructor. The constructor returns as soon as any of the following things has happened:
+        /// </para>
+        /// <list type="number">
+        /// <item><description> It has successfully connected to LaunchDarkly and received feature flag data. In this
+        /// case, <see cref="Initialized"/> will be true, and the <see cref="DataSourceStatusProvider"/>
+        /// will return a state of <see cref="DataSourceState.Valid"/>. </description></item>
+        /// <item><description> It has not succeeded in connecting within the <see cref="ConfigurationBuilder.StartWaitTime(TimeSpan)"/>
+        /// timeout (the default for this is 5 seconds). This could happen due to a network problem or a
+        /// temporary service outage. In this case, <see cref="Initialized"/> will be false, and the
+        /// <see cref="DataSourceStatusProvider"/> will return a state of <see cref="DataSourceState.Initializing"/>,
+        /// indicating that the SDK will still continue trying to connect in the background. </description></item>
+        /// <item><description> It has encountered an unrecoverable error: for instance, LaunchDarkly has rejected the
+        /// SDK key. Since an invalid key will not become valid, the SDK will not retry in this case.
+        /// <see cref="Initialized"/> will be false, and the <see cref="DataSourceStatusProvider"/> will
+        /// return a state of <see cref="DataSourceState.Off"/>. </description></item>
+        /// </list>
+        /// <para>
+        /// If you have specified <see cref="ConfigurationBuilder.Offline"/> mode or
+        /// <see cref="Components.ExternalUpdatesOnly"/>, the constructor returns immediately without
+        /// trying to connect to LaunchDarkly.
+        /// </para>
+        /// <para>
+        /// Failure to connect to LaunchDarkly will never cause the constructor to throw an exception.
+        /// Under any circumstance where it is not able to get feature flag data from LaunchDarkly (and
+        /// therefore <see cref="Initialized"/> is false), if it does not have any other source of data
+        /// (such as a persistent data store) then feature flag evaluations will behave the same as if
+        /// the flags were not found: that is, they will return whatever default value is specified in
+        /// your code.
+        /// </para>
+        /// </remarks>
+        /// <param name="config">a client configuration object (which includes an SDK key)</param>
+        /// <example>
+        /// <code>
+        ///     var config = Configuration.Builder("my-sdk-key")
+        ///         .AllAttributesPrivate(true)
+        ///         .EventCapacity(1000)
+        ///         .Build();
+        ///     var client = new LDClient(config);
+        /// </code>
+        /// </example>
+        /// <seealso cref="LdClient.LdClient(string)"/>
+        public LdClient(Configuration config)
         {
-            Log.InfoFormat("Starting LaunchDarkly Client {0}",
-                ServerSideClientEnvironment.Instance.Version);
-
             _configuration = config;
 
-            if (eventProcessor == null)
-            {
-                _eventProcessor = (_configuration.EventProcessorFactory ??
-                    Components.DefaultEventProcessor).CreateEventProcessor(_configuration);
-                _shouldDisposeEventProcessor = true;
-            }
-            else
-            {
-                _eventProcessor = eventProcessor;
-                // The following line is for backward compatibility with the obsolete mechanism by which the
-                // caller could pass in an IStoreEvents implementation instance that we did not create.  We
-                // were not disposing of that instance when the client was closed, so we should continue not
-                // doing so until the next major version eliminates that mechanism.  We will always dispose
-                // of instances that we created ourselves from a factory.
-                _shouldDisposeEventProcessor = false;
-            }
+            var logConfig = (config.LoggingConfigurationFactory ?? Components.Logging())
+                .CreateLoggingConfiguration();
+            _log = logConfig.LogAdapter.Logger(logConfig.BaseLoggerName ?? LogNames.DefaultBase);
+            _log.Info("Starting LaunchDarkly client {0}",
+                AssemblyVersions.GetAssemblyVersionStringForType(typeof(LdClient)));
+            _evalLog = _log.SubLogger(LogNames.EvaluationSubLog);
 
-            IFeatureStore store;
-            if (_configuration.FeatureStore == null)
-            {
-                store = (_configuration.FeatureStoreFactory ??
-                    Components.InMemoryFeatureStore).CreateFeatureStore();
-                _shouldDisposeFeatureStore = true;
-            }
-            else
-            {
-                store = _configuration.FeatureStore;
-                _shouldDisposeFeatureStore = false; // see previous comment
-            }
-            _featureStore = new FeatureStoreClientWrapper(store);
+            var basicConfig = new BasicConfiguration(config, _log);
+            var httpConfig = (config.HttpConfigurationFactory ?? Components.HttpConfiguration())
+                .CreateHttpConfiguration(basicConfig);
+            ServerDiagnosticStore diagnosticStore = _configuration.DiagnosticOptOut ? null :
+                new ServerDiagnosticStore(_configuration, basicConfig, httpConfig);
 
-            _updateProcessor = (_configuration.UpdateProcessorFactory ??
-                Components.DefaultUpdateProcessor).CreateUpdateProcessor(_configuration, _featureStore);
+            var taskExecutor = new TaskExecutor(this, _log);
 
-            var initTask = _updateProcessor.Start();
+            var clientContext = new LdClientContext(basicConfig, httpConfig, diagnosticStore, taskExecutor);
 
-            if (!(_updateProcessor is NullUpdateProcessor))
+            var dataStoreUpdates = new DataStoreUpdatesImpl(taskExecutor, _log.SubLogger(LogNames.DataStoreSubLog));
+            _dataStore = (_configuration.DataStoreFactory ?? Components.InMemoryDataStore)
+                .CreateDataStore(clientContext, dataStoreUpdates);
+            _dataStoreStatusProvider = new DataStoreStatusProviderImpl(_dataStore, dataStoreUpdates);
+
+            var bigSegmentsConfig = (_configuration.BigSegmentsConfigurationFactory ?? Components.BigSegments(null))
+                .CreateBigSegmentsConfiguration(clientContext);
+            _bigSegmentStoreWrapper = bigSegmentsConfig.Store is null ? null :
+                new BigSegmentStoreWrapper(
+                    bigSegmentsConfig,
+                    taskExecutor,
+                    _log.SubLogger(LogNames.BigSegmentsSubLog)
+                    );
+            _bigSegmentStoreStatusProvider = new BigSegmentStoreStatusProviderImpl(_bigSegmentStoreWrapper);
+
+            _evaluator = new Evaluator(
+                GetFlag,
+                GetSegment,
+                _bigSegmentStoreWrapper == null ? (Func<string, BigSegmentsInternalTypes.BigSegmentsQueryResult>)null :
+                    _bigSegmentStoreWrapper.GetUserMembership,
+                _log
+                );
+
+            var eventProcessorFactory =
+                config.Offline ? Components.NoEvents :
+                (_configuration.EventProcessorFactory ?? Components.SendEvents());
+            _eventProcessor = eventProcessorFactory.CreateEventProcessor(clientContext);
+
+            var dataSourceUpdates = new DataSourceUpdatesImpl(_dataStore, _dataStoreStatusProvider,
+                taskExecutor, _log, logConfig.LogDataSourceOutageAsErrorAfter);
+            IDataSourceFactory dataSourceFactory =
+                config.Offline ? Components.ExternalUpdatesOnly :
+                (_configuration.DataSourceFactory ?? Components.StreamingDataSource());
+            _dataSource = dataSourceFactory.CreateDataSource(clientContext, dataSourceUpdates);
+            _dataSourceStatusProvider = new DataSourceStatusProviderImpl(dataSourceUpdates);
+            _flagTracker = new FlagTrackerImpl(dataSourceUpdates,
+                (string key, User user) => JsonVariation(key, user, LdValue.Null));
+
+            var initTask = _dataSource.Start();
+
+            if (!(_dataSource is ComponentsImpl.NullDataSource))
             {
-                Log.InfoFormat("Waiting up to {0} milliseconds for LaunchDarkly client to start..",
+                _log.Info("Waiting up to {0} milliseconds for LaunchDarkly client to start...",
                     _configuration.StartWaitTime.TotalMilliseconds);
             }
 
             try
             {
-                var unused = initTask.Wait(_configuration.StartWaitTime);
+                var success = initTask.Wait(_configuration.StartWaitTime);
+                if (!success)
+                {
+                    _log.Warn("Timeout encountered waiting for LaunchDarkly client initialization");
+                }
             }
             catch (AggregateException)
             {
@@ -92,53 +199,34 @@ namespace LaunchDarkly.Client
         }
 
         /// <summary>
-        /// Creates a new client to connect to LaunchDarkly with a custom configuration.
-        /// </summary>
-        /// <param name="config">a client configuration object</param>
-        /// <example>
-        /// <code>
-        ///     var config = Configuration.Builder("my-sdk-key")
-        ///         .AllAttributesPrivate(true)
-        ///         .EventCapacity(1000)
-        ///         .Build();
-        ///     var client = new LDClient(config);
-        /// </code>
-        /// </example>
-        /// <remarks>
-        /// The constructor will block until the client has successfully connected to LaunchDarkly
-        /// (assuming it is not in <see cref="IConfigurationBuilder.Offline(bool)"/> mode), or until
-        /// the timeout specified by <see cref="IConfigurationBuilder.StartWaitTime(TimeSpan)"/> has
-        /// elapsed. If it times out, <see cref="LdClient.Initialized"/> will be false.
-        /// </remarks>
-#pragma warning disable 618  // suppress warning for calling obsolete ctor
-        public LdClient(Configuration config) : this(config, null)
-        #pragma warning restore 618
-        {
-        }
-
-        /// <summary>
         /// Creates a new client instance that connects to LaunchDarkly with the default configuration.
         /// </summary>
-        /// <param name="sdkKey">the SDK key for your LaunchDarkly environment</param>
-        /// <example>
-        /// <code>
-        ///     var client = new LDClient("my-sdk-key");
-        /// </code>
-        /// </example>
         /// <remarks>
-        /// The constructor will block until the client has successfully connected to LaunchDarkly, or
-        /// until the default timeout has elapsed (10 seconds). If it times out,
-        /// <see cref="LdClient.Initialized"/> will be false.
+        /// <para>
+        /// If you need to specify any custom SDK options, use <see cref="LdClient.LdClient(Configuration)"/>
+        /// instead.
+        /// </para>
+        /// <para>
+        /// Applications should instantiate a single instance for the lifetime of the application. In
+        /// unusual cases where an application needs to evaluate feature flags from different LaunchDarkly
+        /// projects or environments, you may create multiple clients, but they should still be retained
+        /// for the lifetime of the application rather than created per request or per thread.
+        /// </para>
+        /// <para>
+        /// The constructor will never throw an exception, even if initialization fails. For more details
+        /// about initialization behavior and how to detect error conditions, see
+        /// <see cref="LdClient.LdClient(Configuration)"/>.
+        /// </para>
         /// </remarks>
+        /// <param name="sdkKey">the SDK key for your LaunchDarkly environment</param>
+        /// <seealso cref="LdClient.LdClient(Configuration)"/>
         public LdClient(string sdkKey) : this(Configuration.Default(sdkKey))
         {
         }
 
-        /// <inheritdoc/>
-        public bool Initialized()
-        {
-            return IsOffline() || _updateProcessor.Initialized();
-        }
+        #endregion
+
+        #region Public methods
 
         /// <inheritdoc/>
         public bool IsOffline()
@@ -165,18 +253,17 @@ namespace LaunchDarkly.Client
         }
 
         /// <inheritdoc/>
+        public double DoubleVariation(string key, User user, double defaultValue)
+        {
+            return Evaluate(key, user, LdValue.Of(defaultValue), LdValue.Convert.Double, true, EventFactory.Default).Value;
+        }
+
+        /// <inheritdoc/>
         public string StringVariation(string key, User user, string defaultValue)
         {
             return Evaluate(key, user, LdValue.Of(defaultValue), LdValue.Convert.String, true, EventFactory.Default).Value;
         }
-
-        /// <inheritdoc/>
-        [Obsolete("Use the ImmutableJsonValue-based overload of JsonVariation")]
-        public JToken JsonVariation(string key, User user, JToken defaultValue)
-        {
-            return Evaluate(key, user, LdValue.FromSafeValue(defaultValue), LdValue.Convert.UnsafeJToken, false, EventFactory.Default).Value;
-        }
-
+        
         /// <inheritdoc/>
         public LdValue JsonVariation(string key, User user, LdValue defaultValue)
         {
@@ -202,138 +289,138 @@ namespace LaunchDarkly.Client
         }
 
         /// <inheritdoc/>
+        public EvaluationDetail<double> DoubleVariationDetail(string key, User user, double defaultValue)
+        {
+            return Evaluate(key, user, LdValue.Of(defaultValue), LdValue.Convert.Double, true, EventFactory.DefaultWithReasons);
+        }
+
+        /// <inheritdoc/>
         public EvaluationDetail<string> StringVariationDetail(string key, User user, string defaultValue)
         {
             return Evaluate(key, user, LdValue.Of(defaultValue), LdValue.Convert.String, true, EventFactory.DefaultWithReasons);
         }
-
-        /// <inheritdoc/>
-        [Obsolete("Use the ImmutableJsonValue-based overload of JsonVariation")]
-        public EvaluationDetail<JToken> JsonVariationDetail(string key, User user, JToken defaultValue)
-        {
-            return Evaluate(key, user, LdValue.FromSafeValue(defaultValue), LdValue.Convert.UnsafeJToken, false, EventFactory.DefaultWithReasons);
-        }
-
+        
         /// <inheritdoc/>
         public EvaluationDetail<LdValue> JsonVariationDetail(string key, User user, LdValue defaultValue)
         {
             return Evaluate(key, user, defaultValue, LdValue.Convert.Json, false, EventFactory.DefaultWithReasons);
         }
-
-        /// <inheritdoc/>
-        [Obsolete("Use AllFlagsState instead. Current versions of the client-side SDK will not generate analytics events correctly if you pass the result of AllFlags.")]
-        public IDictionary<string, JToken> AllFlags(User user)
-        {
-            var state = AllFlagsState(user);
-            if (!state.Valid)
-            {
-                return null;
-            }
-            return state.ToValuesMap();
-        }
-
+        
         /// <inheritdoc/>
         public FeatureFlagsState AllFlagsState(User user, params FlagsStateOption[] options)
         {
             if (IsOffline())
             {
-                Log.Warn("AllFlagsState() was called when client is in offline mode. Returning empty state.");
+                _evalLog.Warn("AllFlagsState() called when client is in offline mode; returning empty state");
                 return new FeatureFlagsState(false);
             }
-            if (!Initialized())
+            if (!Initialized)
             {
-                if (_featureStore.Initialized())
+                if (_dataStore.Initialized())
                 {
-                    Log.Warn("AllFlagsState() called before client initialized; using last known values from feature store");
+                    _evalLog.Warn("AllFlagsState() called before client initialized; using last known values from data store");
                 }
                 else
                 {
-                    Log.Warn("AllFlagsState() called before client initialized; feature store unavailable, returning empty state");
+                    _evalLog.Warn("AllFlagsState() called before client initialized; data store unavailable, returning empty state");
                     return new FeatureFlagsState(false);
                 }
             }
             if (user == null || user.Key == null)
             {
-                Log.Warn("AllFlagsState() called with null user or null user key. Returning empty state");
+                _evalLog.Warn("AllFlagsState() called with null user or null user key; returning empty state");
                 return new FeatureFlagsState(false);
             }
 
-            var state = new FeatureFlagsState(true);
+            var builder = new FeatureFlagsStateBuilder(options);
             var clientSideOnly = FlagsStateOption.HasOption(options, FlagsStateOption.ClientSideOnly);
             var withReasons = FlagsStateOption.HasOption(options, FlagsStateOption.WithReasons);
             var detailsOnlyIfTracked = FlagsStateOption.HasOption(options, FlagsStateOption.DetailsOnlyForTrackedFlags);
-            IDictionary<string, FeatureFlag> flags = _featureStore.All(VersionedDataKind.Features);
-            foreach (KeyValuePair<string, FeatureFlag> pair in flags)
+            KeyedItems<ItemDescriptor> flags;
+            try
             {
-                var flag = pair.Value;
+                flags = _dataStore.GetAll(DataModel.Features);
+            }
+            catch (Exception e)
+            {
+                LogHelpers.LogException(_log, "Exception while retrieving flags for AllFlagsState", e);
+                return new FeatureFlagsState(false);
+            }
+            foreach (var pair in flags.Items)
+            {
+                if (pair.Value.Item is null || !(pair.Value.Item is FeatureFlag flag))
+                {
+                    continue;
+                }
                 if (clientSideOnly && !flag.ClientSide)
                 {
                     continue;
                 }
                 try
                 {
-                    FeatureFlag.EvalResult result = flag.Evaluate(user, _featureStore, EventFactory.Default);
-                    state.AddFlag(flag, result.Result.Value.InnerValue, result.Result.VariationIndex,
-                        withReasons ? result.Result.Reason : null, detailsOnlyIfTracked);
+                    Evaluator.EvalResult result = _evaluator.Evaluate(flag, user, EventFactory.Default);
+                    builder.AddFlag(flag.Key, result.Result.Value, result.Result.VariationIndex,
+                        result.Result.Reason, flag.Version, flag.TrackEvents, flag.DebugEventsUntilDate);
                 }
                 catch (Exception e)
                 {
-                    Log.ErrorFormat("Exception caught for feature flag \"{0}\" when evaluating all flags: {1}", flag.Key, Util.ExceptionMessage(e));
-                    Log.Debug(e.ToString(), e);
-                    EvaluationReason reason = EvaluationReason.ErrorReason(EvaluationErrorKind.EXCEPTION);
-                    state.AddFlag(flag, null, null, withReasons ? reason : null, detailsOnlyIfTracked);
+                    LogHelpers.LogException(_evalLog,
+                        string.Format("Exception caught for feature flag \"{0}\" when evaluating all flags", flag.Key),
+                        e);
+                    EvaluationReason reason = EvaluationReason.ErrorReason(EvaluationErrorKind.Exception);
+                    builder.AddFlag(flag.Key, new EvaluationDetail<LdValue>(LdValue.Null, null, reason));
                 }
             }
-            return state;
+            return builder.Build();
         }
 
         private EvaluationDetail<T> Evaluate<T>(string featureKey, User user, LdValue defaultValue, LdValue.Converter<T> converter,
             bool checkType, EventFactory eventFactory)
         {
             T defaultValueOfType = converter.ToType(defaultValue);
-            if (!Initialized())
+            if (!Initialized)
             {
-                if (_featureStore.Initialized())
+                if (_dataStore.Initialized())
                 {
-                    Log.Warn("Flag evaluation before client initialized; using last known values from feature store");
+                    _evalLog.Warn("Flag evaluation before client initialized; using last known values from data store");
                 }
                 else
                 {
-                    Log.Warn("Flag evaluation before client initialized; feature store unavailable, returning default value");
+                    _evalLog.Warn("Flag evaluation before client initialized; data store unavailable, returning default value");
                     return new EvaluationDetail<T>(defaultValueOfType, null,
-                        EvaluationReason.ErrorReason(EvaluationErrorKind.CLIENT_NOT_READY));
+                        EvaluationReason.ErrorReason(EvaluationErrorKind.ClientNotReady));
                 }
             }
 
             FeatureFlag featureFlag = null;
             try
             {
-                featureFlag = _featureStore.Get(VersionedDataKind.Features, featureKey);
+                featureFlag = GetFlag(featureKey);
                 if (featureFlag == null)
                 {
-                    Log.InfoFormat("Unknown feature flag {0}; returning default value",
+                    _evalLog.Info("Unknown feature flag \"{0}\"; returning default value",
                         featureKey);
-                    _eventProcessor.SendEvent(eventFactory.NewUnknownFeatureRequestEvent(featureKey, user, defaultValue,
-                        EvaluationErrorKind.FLAG_NOT_FOUND));
+                    _eventProcessor.RecordEvaluationEvent(eventFactory.NewUnknownFlagEvaluationEvent(
+                        featureKey, user, defaultValue, EvaluationErrorKind.FlagNotFound));
                     return new EvaluationDetail<T>(defaultValueOfType, null,
-                        EvaluationReason.ErrorReason(EvaluationErrorKind.FLAG_NOT_FOUND));
+                        EvaluationReason.ErrorReason(EvaluationErrorKind.FlagNotFound));
                 }
 
                 if (user == null || user.Key == null)
                 {
-                    Log.Warn("Feature flag evaluation called with null user or null user key. Returning default");
-                    _eventProcessor.SendEvent(eventFactory.NewDefaultFeatureRequestEvent(featureFlag, user, defaultValue,
-                        EvaluationErrorKind.USER_NOT_SPECIFIED));
+                    _evalLog.Warn("Null user or null user key when evaluating flag \"{0}\"; returning default value", featureKey);
+                    _eventProcessor.RecordEvaluationEvent(eventFactory.NewDefaultValueEvaluationEvent(
+                        featureFlag, user, defaultValue, EvaluationErrorKind.UserNotSpecified));
                     return new EvaluationDetail<T>(defaultValueOfType, null,
-                        EvaluationReason.ErrorReason(EvaluationErrorKind.USER_NOT_SPECIFIED));
+                        EvaluationReason.ErrorReason(EvaluationErrorKind.UserNotSpecified));
                 }
                 
-                FeatureFlag.EvalResult evalResult = featureFlag.Evaluate(user, _featureStore, eventFactory);
+                Evaluator.EvalResult evalResult = _evaluator.Evaluate(featureFlag, user, eventFactory);
                 if (!IsOffline())
                 {
                     foreach (var prereqEvent in evalResult.PrerequisiteEvents)
                     {
-                        _eventProcessor.SendEvent(prereqEvent);
+                        _eventProcessor.RecordEvaluationEvent(prereqEvent);
                     }
                 }
                 var evalDetail = evalResult.Result;
@@ -347,40 +434,38 @@ namespace LaunchDarkly.Client
                 {
                     if (checkType && !defaultValue.IsNull && evalDetail.Value.Type != defaultValue.Type)
                     {
-                        Log.ErrorFormat("Expected type: {0} but got {1} when evaluating FeatureFlag: {2}. Returning default",
+                        _evalLog.Error("Expected type {0} but got {1} when evaluating feature flag \"{2}\"; returning default value",
                             defaultValue.Type,
                             evalDetail.Value.Type,
                             featureKey);
 
-                        _eventProcessor.SendEvent(eventFactory.NewDefaultFeatureRequestEvent(featureFlag, user,
-                            defaultValue, EvaluationErrorKind.WRONG_TYPE));
+                        _eventProcessor.RecordEvaluationEvent(eventFactory.NewDefaultValueEvaluationEvent(
+                            featureFlag, user, defaultValue, EvaluationErrorKind.WrongType));
                         return new EvaluationDetail<T>(defaultValueOfType, null,
-                            EvaluationReason.ErrorReason(EvaluationErrorKind.WRONG_TYPE));
+                            EvaluationReason.ErrorReason(EvaluationErrorKind.WrongType));
                     }
                     returnDetail = new EvaluationDetail<T>(converter.ToType(evalDetail.Value),
                         evalDetail.VariationIndex, evalDetail.Reason);
                 }
-                _eventProcessor.SendEvent(eventFactory.NewFeatureRequestEvent(featureFlag, user,
-                    evalDetail, defaultValue));
+                _eventProcessor.RecordEvaluationEvent(eventFactory.NewEvaluationEvent(
+                    featureFlag, user, evalDetail, defaultValue));
                 return returnDetail;
             }
             catch (Exception e)
             {
-                Log.ErrorFormat("Encountered exception in LaunchDarkly client: {0} when evaluating feature key: {1} for user key: {2}",
-                     Util.ExceptionMessage(e),
-                     featureKey,
-                     user.Key);
-                Log.Debug(e.ToString(), e);
-                var reason = EvaluationReason.ErrorReason(EvaluationErrorKind.EXCEPTION);
+                LogHelpers.LogException(_evalLog,
+                    string.Format("Exception when evaluating feature flag \"{0}\"", featureKey),
+                    e);
+                var reason = EvaluationReason.ErrorReason(EvaluationErrorKind.Exception);
                 if (featureFlag == null)
                 {
-                    _eventProcessor.SendEvent(eventFactory.NewUnknownFeatureRequestEvent(featureKey, user,
-                        defaultValue, EvaluationErrorKind.EXCEPTION));
+                    _eventProcessor.RecordEvaluationEvent(eventFactory.NewUnknownFlagEvaluationEvent(
+                        featureKey, user, defaultValue, EvaluationErrorKind.Exception));
                 }
                 else
                 {
-                    _eventProcessor.SendEvent(eventFactory.NewFeatureRequestEvent(featureFlag, user,
-                        new EvaluationDetail<LdValue>(defaultValue, null, reason), defaultValue));
+                    _eventProcessor.RecordEvaluationEvent(eventFactory.NewEvaluationEvent(
+                        featureFlag, user, new EvaluationDetail<LdValue>(defaultValue, null, reason), defaultValue));
                 }
                 return new EvaluationDetail<T>(defaultValueOfType, null, reason);
             }
@@ -402,44 +487,32 @@ namespace LaunchDarkly.Client
         }
 
         /// <inheritdoc/>
-        public void Track(string name, User user)
-        {
-            Track(name, user, LdValue.Null);
-        }
+        public void Track(string name, User user) =>
+            TrackInternal(name, user, LdValue.Null, null);
 
         /// <inheritdoc/>
-        [Obsolete("Use Track(string, User, ImmutableJsonValue")]
-        public void Track(string name, User user, string data)
-        {
-            Track(name, user, LdValue.Of(data));
-        }
+        public void Track(string name, User user, LdValue data) =>
+            TrackInternal(name, user, data, null);
 
         /// <inheritdoc/>
-        [Obsolete("Use Track(string, User, ImmutableJsonValue")]
-        public void Track(string name, JToken data, User user)
-        {
-            Track(name, user, LdValue.FromSafeValue(data));
-        }
+        public void Track(string name, User user, LdValue data, double metricValue) =>
+            TrackInternal(name, user, data, metricValue);
 
-        /// <inheritdoc/>
-        public void Track(string name, User user, LdValue data)
+        private void TrackInternal(string key, User user, LdValue data, double? metricValue)
         {
             if (user == null || String.IsNullOrEmpty(user.Key))
             {
-                Log.Warn("Track called with null user or null user key");
+                _log.Warn("Track called with null user or null user key");
                 return;
             }
-            _eventProcessor.SendEvent(EventFactory.Default.NewCustomEvent(name, user, data));
-        }
-
-        /// <inheritdoc/>
-        public void Track(string name, User user, LdValue data, double metricValue)
-        {
-            if (user == null || user.Key == null)
+            _eventProcessor.RecordCustomEvent(new EventProcessorTypes.CustomEvent
             {
-                Log.Warn("Track called with null user or null user key");
-            }
-            _eventProcessor.SendEvent(EventFactory.Default.NewCustomEvent(name, user, data, metricValue));
+                Timestamp = UnixMillisecondTime.Now,
+                User = user,
+                EventKey = key,
+                Data = data,
+                MetricValue = metricValue
+            });
         }
 
         /// <inheritdoc/>
@@ -447,38 +520,35 @@ namespace LaunchDarkly.Client
         {
             if (user == null || String.IsNullOrEmpty(user.Key))
             {
-                Log.Warn("Identify called with null user or null user key");
+                _log.Warn("Identify called with null user or null user key");
                 return;
             }
-            _eventProcessor.SendEvent(EventFactory.Default.NewIdentifyEvent(user));
+            _eventProcessor.RecordIdentifyEvent(new EventProcessorTypes.IdentifyEvent
+            {
+                Timestamp = UnixMillisecondTime.Now,
+                User = user
+            });
         }
 
         /// <inheritdoc/>
-        public Version Version
+        public void Alias(User currentUser, User previousUser)
         {
-            get
+            if (currentUser == null || previousUser == null ||
+                string.IsNullOrEmpty(currentUser.Key) || string.IsNullOrEmpty(previousUser.Key))
             {
-                return ServerSideClientEnvironment.Instance.Version;
+                _log.Warn("Alias called with null user or null user key");
+                return;
             }
-        }
-        
-        private void Dispose(bool disposing)
-        {
-            if (disposing) // follow standard IDisposable pattern
+            _eventProcessor.RecordAliasEvent(new EventProcessorTypes.AliasEvent
             {
-                Log.Info("Closing LaunchDarkly client.");
-                // See comments in LdClient constructor: eventually all of these implementation objects
-                // will be factory-created and will have the same lifecycle as the client.
-                if (_shouldDisposeEventProcessor)
-                {
-                    _eventProcessor.Dispose();
-                }
-                if (_shouldDisposeFeatureStore)
-                {
-                    _featureStore.Dispose();
-                }
-                _updateProcessor.Dispose();
-            }
+                Timestamp = UnixMillisecondTime.Now,
+                CurrentKey = currentUser.Key,
+                CurrentKind = currentUser.Anonymous ? EventProcessorTypes.ContextKind.AnonymousUser :
+                    EventProcessorTypes.ContextKind.User,
+                PreviousKey = previousUser.Key,
+                PreviousKind = previousUser.Anonymous ? EventProcessorTypes.ContextKind.AnonymousUser :
+                    EventProcessorTypes.ContextKind.User
+            });
         }
 
         /// <summary>
@@ -491,12 +561,8 @@ namespace LaunchDarkly.Client
         /// </para>
         /// <para>
         /// Any components that were added by specifying a factory object
-        /// (<see cref="ConfigurationExtensions.WithFeatureStore(Configuration, IFeatureStore)"/>, etc.)
+        /// (<see cref="ConfigurationBuilder.DataStore(IDataStoreFactory)"/>, etc.)
         /// will also be disposed of by this method; their lifecycle is the same as the client's.
-        /// However, for any components that you constructed yourself and passed in (via the deprecated
-        /// method <see cref="ConfigurationExtensions.WithFeatureStore(Configuration, IFeatureStore)"/>,
-        /// or the deprecated <c>LdClient</c> constructor that takes an <see cref="IEventProcessor"/>),
-        /// this will not happen; you are responsible for managing their lifecycle.
         /// </para>
         /// </remarks>
         /// <see cref="IDisposable.Dispose"/>
@@ -515,5 +581,43 @@ namespace LaunchDarkly.Client
         {
             _eventProcessor.Flush();
         }
+
+        #endregion
+
+        #region Private methods
+
+        private FeatureFlag GetFlag(string key)
+        {
+            var maybeItem = _dataStore.Get(DataModel.Features, key);
+            if (maybeItem.HasValue && maybeItem.Value.Item != null && maybeItem.Value.Item is FeatureFlag f)
+            {
+                return f;
+            }
+            return null;
+        }
+
+        private Segment GetSegment(string key)
+        {
+            var maybeItem = _dataStore.Get(DataModel.Segments, key);
+            if (maybeItem.HasValue && maybeItem.Value.Item != null && maybeItem.Value.Item is Segment s)
+            {
+                return s;
+            }
+            return null;
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (disposing) // follow standard IDisposable pattern
+            {
+                _log.Info("Closing LaunchDarkly client");
+                _eventProcessor.Dispose();
+                _dataStore.Dispose();
+                _dataSource.Dispose();
+                _bigSegmentStoreWrapper?.Dispose();
+            }
+        }
+
+        #endregion
     }
 }

@@ -1,42 +1,58 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <Import Project="VersionInfo.props" />
   <PropertyGroup>
-    <TargetFrameworks>netstandard2.0;net45</TargetFrameworks>
-    <PackageLicenseUrl>https://raw.githubusercontent.com/launchdarkly/dotnet-server-sdk/master/LICENSE</PackageLicenseUrl>
+    <Version>6.3.1</Version>
+    <!-- The BUILDFRAMEWORKS variable allows us to override the target frameworks with a
+         single framework that we are testing; this allows us to test with older SDK
+         versions that would error out if they saw any newer target frameworks listed
+         here, even if we weren't running those. -->
+    <BuildFrameworks Condition="'$(BUILDFRAMEWORKS)' == ''">netstandard2.0;netcoreapp2.1;net452;net471;net50</BuildFrameworks>
+    <TargetFrameworks>$(BUILDFRAMEWORKS)</TargetFrameworks>
+    <!-- Note: whenever we add or remove supported target frameworks, we must update ServerDiagnosticStore.GetDotNetTargetFramework() -->
     <DebugType>portable</DebugType>
     <AssemblyName>LaunchDarkly.ServerSdk</AssemblyName>
     <OutputType>Library</OutputType>
-    <PackageId>D2L.LaunchDarkly.ServerSdk</PackageId>
-    <GenerateAssemblyTitleAttribute>false</GenerateAssemblyTitleAttribute>
-    <GenerateAssemblyDescriptionAttribute>false</GenerateAssemblyDescriptionAttribute>
-    <GenerateAssemblyConfigurationAttribute>false</GenerateAssemblyConfigurationAttribute>
-    <GenerateAssemblyCompanyAttribute>false</GenerateAssemblyCompanyAttribute>
-    <GenerateAssemblyProductAttribute>false</GenerateAssemblyProductAttribute>
-    <GenerateAssemblyCopyrightAttribute>false</GenerateAssemblyCopyrightAttribute>
+    <PackageId>LaunchDarkly.ServerSdk</PackageId>
+    <RootNamespace>LaunchDarkly.Sdk.Server</RootNamespace>
+    <LangVersion>7.3</LangVersion>
+    <Description>LaunchDarkly Server-Side .NET SDK</Description>
+    <Authors>LaunchDarkly</Authors>
+    <Owners>LaunchDarkly</Owners>
+    <Company>LaunchDarkly</Company>
+    <Authors>LaunchDarkly</Authors>
+    <Owners>LaunchDarkly</Owners>
+    <Copyright>Copyright 2020 LaunchDarkly</Copyright>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/launchdarkly/dotnet-server-sdk</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/launchdarkly/dotnet-server-sdk</RepositoryUrl>
+    <RepositoryBranch>master</RepositoryBranch>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+
+    <!-- CopyLocalLockFileAssemblies causes dependency DLLs to be copied into the
+         build products, which is necessary for our documentation generation logic;
+         this doesn't affect what goes into the NuGet package. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    
+    <!-- fail if XML comments are missing or invalid -->
+    <WarningsAsErrors>1570,1571,1572,1573,1574,1580,1581,1584,1591,1710,1711,1712</WarningsAsErrors>
   </PropertyGroup>
-  <ItemGroup Condition="'$(Configuration)'=='Release'">
-    <PackageReference Include="D2L.LaunchDarkly.CommonSdk" Version="2.9.2.1" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)'=='Debug'">
-    <PackageReference Include="D2L.LaunchDarkly.CommonSdk" Version="2.9.2.1" />
-  </ItemGroup>
+
   <ItemGroup>
-    <PackageReference Include="Common.Logging" Version="3.4.1" />
     <PackageReference Include="LaunchDarkly.Cache" Version="1.0.2" />
-    <PackageReference Include="Newtonsoft.Json" Version="9.0.1" Condition="'$(TargetFramework)' != 'net45'" />
-    <PackageReference Include="Newtonsoft.Json" Version="6.0.6" Condition="'$(TargetFramework)' == 'net45'" />
-    <PackageReference Include="System.Collections.Immutable" Version="1.5.0" />
-  </ItemGroup>
-  <ItemGroup Condition=" '$(TargetFramework)' == 'net45' ">
-    <Reference Include="System" />
-    <Reference Include="System.Net.Http" />
-    <Reference Include="Microsoft.CSharp" />
+    <PackageReference Include="LaunchDarkly.CommonSdk" Version="5.4.0" />
+    <PackageReference Include="LaunchDarkly.EventSource" Version="4.1.3" />
+    <PackageReference Include="LaunchDarkly.InternalSdk" Version="2.3.0" />
+    <PackageReference Include="LaunchDarkly.JsonStream" Version="1.0.3" />
+    <PackageReference Include="LaunchDarkly.Logging" Version="1.0.1" />
+    <PackageReference Include="System.Collections.Immutable" Version="1.7.1" />
   </ItemGroup>
 
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DocumentationFile>bin\Debug\$(TargetFramework)\LaunchDarkly.ServerSdk.xml</DocumentationFile>
+  <PropertyGroup Condition="'$(Configuration)'=='Release'">
+    <AssemblyOriginatorKeyFile>../../LaunchDarkly.snk</AssemblyOriginatorKeyFile>
+    <SignAssembly>true</SignAssembly>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DocumentationFile>bin\Release\$(TargetFramework)\LaunchDarkly.ServerSdk.xml</DocumentationFile>
+
+  <PropertyGroup>
+    <DocumentationFile>bin\$(Configuration)\$(TargetFramework)\LaunchDarkly.ServerSdk.xml</DocumentationFile>
   </PropertyGroup>
 </Project>

@@ -1,23 +1,25 @@
-﻿using System.Collections.Generic;
-using LaunchDarkly.Client;
-using Newtonsoft.Json.Linq;
+﻿using LaunchDarkly.Sdk.Server.Integrations;
+using LaunchDarkly.Sdk.Server.Interfaces;
+using LaunchDarkly.Sdk.Server.Internal.Model;
 using Xunit;
+using Xunit.Abstractions;
 
-namespace LaunchDarkly.Tests
+using static LaunchDarkly.Sdk.Server.Interfaces.EventProcessorTypes;
+
+namespace LaunchDarkly.Sdk.Server
 {
-    public class LdClientEventTest
+    public class LdClientEventTest : BaseTest
     {
         private static readonly User user = User.WithKey("userkey");
-        private IFeatureStore featureStore = TestUtils.InMemoryFeatureStore();
-        private TestEventProcessor eventSink = new TestEventProcessor();
-        private ILdClient client;
+        private readonly TestData testData = TestData.DataSource();
+        private readonly MockEventProcessor eventSink = new MockEventProcessor();
+        private readonly ILdClient client;
 
-        public LdClientEventTest()
+        public LdClientEventTest(ITestOutputHelper testOutput) : base(testOutput)
         {
-            var config = Configuration.Builder("SDK_KEY")
-                .FeatureStoreFactory(TestUtils.SpecificFeatureStore(featureStore))
-                .EventProcessorFactory(TestUtils.SpecificEventProcessor(eventSink))
-                .UpdateProcessorFactory(Components.NullUpdateProcessor)
+            var config = BasicConfig()
+                .DataSource(testData)
+                .Events(eventSink.AsSingletonFactory())
                 .Build();
             client = new LdClient(config);
         }
@@ -27,7 +29,7 @@ namespace LaunchDarkly.Tests
         {
             client.Identify(user);
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             var ie = Assert.IsType<IdentifyEvent>(eventSink.Events[0]);
             Assert.Equal(user.Key, ie.User.Key);
         }
@@ -37,7 +39,7 @@ namespace LaunchDarkly.Tests
         {
             client.Identify(null);
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
@@ -45,7 +47,7 @@ namespace LaunchDarkly.Tests
         {
             client.Identify(User.WithKey(null));
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
@@ -53,7 +55,7 @@ namespace LaunchDarkly.Tests
         {
             client.Identify(User.WithKey(""));
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
@@ -61,72 +63,38 @@ namespace LaunchDarkly.Tests
         {
             client.Track("eventkey", user);
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             var ce = Assert.IsType<CustomEvent>(eventSink.Events[0]);
             Assert.Equal(user.Key, ce.User.Key);
-            Assert.Equal("eventkey", ce.Key);
-            Assert.Equal(LdValue.Null, ce.LdValueData);
+            Assert.Equal("eventkey", ce.EventKey);
+            Assert.Equal(LdValue.Null, ce.Data);
             Assert.Null(ce.MetricValue);
         }
 
         [Fact]
         public void TrackSendsEventWithData()
         {
-            var data = LdValue.Convert.String.ObjectFrom(new Dictionary<string, string> { { "thing", "stuff" } });
+            var data = LdValue.BuildObject().Add("thing", "stuff").Build();
             client.Track("eventkey", user, data);
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             var ce = Assert.IsType<CustomEvent>(eventSink.Events[0]);
             Assert.Equal(user.Key, ce.User.Key);
-            Assert.Equal("eventkey", ce.Key);
-            Assert.Equal(data, ce.LdValueData);
+            Assert.Equal("eventkey", ce.EventKey);
+            Assert.Equal(data, ce.Data);
         }
-
-        [Fact]
-        public void TrackSendsEventWithDataDeprecatedMethod()
-        {
-            var data = new JObject();
-            data.Add("thing", new JValue("stuff"));
-#pragma warning disable 0618
-            client.Track("eventkey", data, user);
-#pragma warning restore 0618
-
-            Assert.Equal(1, eventSink.Events.Count);
-            var ce = Assert.IsType<CustomEvent>(eventSink.Events[0]);
-            Assert.Equal(user.Key, ce.User.Key);
-            Assert.Equal("eventkey", ce.Key);
-#pragma warning disable 0618
-            Assert.Equal(data, ce.LdValueData.AsJToken());
-#pragma warning restore 0618
-            Assert.Null(ce.MetricValue);
-        }
-
-        [Fact]
-        public void TrackSendsEventWithStringData()
-        {
-#pragma warning disable 0618
-            client.Track("eventkey", user, "thing");
-#pragma warning restore 0618
-
-            Assert.Equal(1, eventSink.Events.Count);
-            var ce = Assert.IsType<CustomEvent>(eventSink.Events[0]);
-            Assert.Equal(user.Key, ce.User.Key);
-            Assert.Equal("eventkey", ce.Key);
-            Assert.Equal(LdValue.Of("thing"), ce.LdValueData);
-            Assert.Null(ce.MetricValue);
-        }
-
+        
         [Fact]
         public void TrackSendsEventWithWithMetricValue()
         {
-            var data = LdValue.Convert.String.ObjectFrom(new Dictionary<string, string> { { "thing", "stuff" } });
+            var data = LdValue.BuildObject().Add("thing", "stuff").Build();
             client.Track("eventkey", user, data, 1.5);
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             var ce = Assert.IsType<CustomEvent>(eventSink.Events[0]);
             Assert.Equal(user.Key, ce.User.Key);
-            Assert.Equal("eventkey", ce.Key);
-            Assert.Equal(data, ce.LdValueData);
+            Assert.Equal("eventkey", ce.EventKey);
+            Assert.Equal(data, ce.Data);
             Assert.Equal(1.5, ce.MetricValue);
         }
 
@@ -135,7 +103,7 @@ namespace LaunchDarkly.Tests
         {
             client.Track("eventkey", null);
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
@@ -143,7 +111,7 @@ namespace LaunchDarkly.Tests
         {
             client.Track("eventkey", User.WithKey(null));
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
@@ -151,17 +119,17 @@ namespace LaunchDarkly.Tests
         {
             client.Track("eventkey", User.WithKey(""));
 
-            Assert.Equal(0, eventSink.Events.Count);
+            Assert.Empty(eventSink.Events);
         }
 
         [Fact]
         public void BoolVariationSendsEvent()
         {
-            var flag = new FeatureFlagBuilder("key").OffWithValue(new JValue(true)).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            var flag = new FeatureFlagBuilder("key").Version(1).OffWithValue(LdValue.Of(true)).Build();
+            testData.UsePreconfiguredFlag(flag);
 
             client.BoolVariation("key", user, false);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, LdValue.Of(true), LdValue.Of(false), null);
         }
 
@@ -169,18 +137,18 @@ namespace LaunchDarkly.Tests
         public void BoolVariationSendsEventForUnknownFlag()
         {
             client.BoolVariation("key", user, false);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckUnknownFeatureEvent(eventSink.Events[0], "key", LdValue.Of(false), null);
         }
 
         [Fact]
         public void IntVariationSendsEvent()
         {
-            var flag = new FeatureFlagBuilder("key").OffWithValue(new JValue(2)).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            var flag = new FeatureFlagBuilder("key").Version(1).OffWithValue(LdValue.Of(2)).Build();
+            testData.UsePreconfiguredFlag(flag);
 
             client.IntVariation("key", user, 1);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, LdValue.Of(2), LdValue.Of(1), null);
         }
 
@@ -188,18 +156,18 @@ namespace LaunchDarkly.Tests
         public void IntVariationSendsEventForUnknownFlag()
         {
             client.IntVariation("key", user, 1);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckUnknownFeatureEvent(eventSink.Events[0], "key", LdValue.Of(1), null);
         }
 
         [Fact]
         public void FloatVariationSendsEvent()
         {
-            var flag = new FeatureFlagBuilder("key").OffWithValue(new JValue(2.5f)).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            var flag = new FeatureFlagBuilder("key").Version(1).OffWithValue(LdValue.Of(2.5f)).Build();
+            testData.UsePreconfiguredFlag(flag);
 
             client.FloatVariation("key", user, 1.0f);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, LdValue.Of(2.5f), LdValue.Of(1.0f), null);
         }
 
@@ -207,18 +175,18 @@ namespace LaunchDarkly.Tests
         public void FloatVariationSendsEventForUnknownFlag()
         {
             client.FloatVariation("key", user, 1.0f);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckUnknownFeatureEvent(eventSink.Events[0], "key", LdValue.Of(1.0f), null);
         }
 
         [Fact]
         public void StringVariationSendsEvent()
         {
-            var flag = new FeatureFlagBuilder("key").OffWithValue(new JValue("b")).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            var flag = new FeatureFlagBuilder("key").Version(1).OffWithValue(LdValue.Of("b")).Build();
+            testData.UsePreconfiguredFlag(flag);
 
             client.StringVariation("key", user, "a");
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, LdValue.Of("b"), LdValue.Of("a"), null);
         }
 
@@ -226,20 +194,20 @@ namespace LaunchDarkly.Tests
         public void StringVariationSendsEventForUnknownFlag()
         {
             client.StringVariation("key", user, "a");
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckUnknownFeatureEvent(eventSink.Events[0], "key", LdValue.Of("a"), null);
         }
 
         [Fact]
         public void JsonVariationSendsEvent()
         {
-            var data = LdValue.Convert.String.ObjectFrom(new Dictionary<string, string> { { "thing", "stuff" } });
-            var flag = new FeatureFlagBuilder("key").OffWithValue(data.InnerValue).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            var data = LdValue.BuildObject().Add("thing", "stuff").Build();
+            var flag = new FeatureFlagBuilder("key").Version(1).OffWithValue(data).Build();
+            testData.UsePreconfiguredFlag(flag);
             var defaultVal = LdValue.Of(42);
 
             client.JsonVariation("key", user, defaultVal);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, data, defaultVal, null);
         }
 
@@ -249,59 +217,30 @@ namespace LaunchDarkly.Tests
             var defaultVal = LdValue.Of(42);
 
             client.JsonVariation("key", user, defaultVal);
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckUnknownFeatureEvent(eventSink.Events[0], "key", defaultVal, null);
         }
-
-        [Fact]
-        public void DeprecatedJsonVariationSendsEvent()
-        {
-            var data = new JObject();
-            data.Add("thing", new JValue("stuff"));
-            var flag = new FeatureFlagBuilder("key").OffWithValue(data).Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
-            var defaultVal = new JValue(42);
-
-#pragma warning disable 0618
-            client.JsonVariation("key", user, defaultVal);
-            Assert.Equal(1, eventSink.Events.Count);
-            CheckFeatureEvent(eventSink.Events[0], flag, LdValue.FromJToken(data),
-                LdValue.FromJToken(defaultVal), null);
-#pragma warning restore 0618
-        }
-
-        [Fact]
-        public void DeprecatedJsonVariationSendsEventForUnknownFlag()
-        {
-            var defaultVal = LdValue.Of(42);
-
-#pragma warning disable 0618
-            client.JsonVariation("key", user, defaultVal);
-#pragma warning restore 0618
-            Assert.Equal(1, eventSink.Events.Count);
-            CheckUnknownFeatureEvent(eventSink.Events[0], "key", defaultVal, null);
-        }
-
+        
         [Fact]
         public void EventTrackingAndReasonCanBeForcedForRule()
         {
             var clause = ClauseBuilder.ShouldMatchUser(user);
             var rule = new RuleBuilder().Id("rule-id").Variation(1).Clauses(clause).TrackEvents(true).Build();
-            var flag = new FeatureFlagBuilder("flag")
+            var flag = new FeatureFlagBuilder("flag").Version(1)
                 .On(true)
                 .Rules(rule)
                 .OffVariation(0)
-                .Variations(new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("off"), LdValue.Of("on"))
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            testData.UsePreconfiguredFlag(flag);
 
             client.StringVariation("flag", user, "default");
 
             // Note, we did not call StringVariationDetail and the flag is not tracked, but we should still get
             // tracking and a reason, because the rule-level trackEvents flag is on for the matched rule.
 
-            Assert.Equal(1, eventSink.Events.Count);
-            var e = Assert.IsType<FeatureRequestEvent>(eventSink.Events[0]);
+            Assert.Single(eventSink.Events);
+            var e = Assert.IsType<EvaluationEvent>(eventSink.Events[0]);
             Assert.True(e.TrackEvents);
             Assert.Equal(EvaluationReason.RuleMatchReason(0, "rule-id"), e.Reason);
         }
@@ -313,20 +252,20 @@ namespace LaunchDarkly.Tests
             var clause1 = ClauseBuilder.ShouldMatchUser(user);
             var rule0 = new RuleBuilder().Id("id0").Variation(1).Clauses(clause0).TrackEvents(true).Build();
             var rule1 = new RuleBuilder().Id("id1").Variation(1).Clauses(clause1).TrackEvents(false).Build();
-            var flag = new FeatureFlagBuilder("flag")
+            var flag = new FeatureFlagBuilder("flag").Version(1)
                 .On(true)
                 .Rules(rule0, rule1)
                 .OffVariation(0)
-                .Variations(new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("off"), LdValue.Of("on"))
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            testData.UsePreconfiguredFlag(flag);
 
             client.StringVariation("flag", user, "default");
 
             // It matched rule1, which has trackEvents: false, so we don't get the override behavior
 
-            Assert.Equal(1, eventSink.Events.Count);
-            var e = Assert.IsType<FeatureRequestEvent>(eventSink.Events[0]);
+            Assert.Single(eventSink.Events);
+            var e = Assert.IsType<EvaluationEvent>(eventSink.Events[0]);
             Assert.False(e.TrackEvents);
             Assert.Null(e.Reason);
         }
@@ -334,22 +273,22 @@ namespace LaunchDarkly.Tests
         [Fact]
         public void EventTrackingAndReasonCanBeForcedForFallthrough()
         {
-            var flag = new FeatureFlagBuilder("flag")
+            var flag = new FeatureFlagBuilder("flag").Version(1)
                 .On(true)
                 .OffVariation(1)
                 .FallthroughVariation(0)
-                .Variations(new JValue("fall"), new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("fall"), LdValue.Of("off"), LdValue.Of("on"))
                 .TrackEventsFallthrough(true)
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            testData.UsePreconfiguredFlag(flag);
 
             client.StringVariation("flag", user, "default");
 
             // Note, we did not call stringVariationDetail and the flag is not tracked, but we should still get
             // tracking and a reason, because trackEventsFallthrough is on and the evaluation fell through.
 
-            Assert.Equal(1, eventSink.Events.Count);
-            var e = Assert.IsType<FeatureRequestEvent>(eventSink.Events[0]);
+            Assert.Single(eventSink.Events);
+            var e = Assert.IsType<EvaluationEvent>(eventSink.Events[0]);
             Assert.True(e.TrackEvents);
             Assert.Equal(EvaluationReason.FallthroughReason, e.Reason);
         }
@@ -357,18 +296,18 @@ namespace LaunchDarkly.Tests
         [Fact]
         public void EventTrackingAndReasonAreNotForcedForFallthroughIfFlagIsNotSet()
         {
-            var flag = new FeatureFlagBuilder("flag")
+            var flag = new FeatureFlagBuilder("flag").Version(1)
                 .On(true)
                 .OffVariation(1)
                 .FallthroughVariation(0)
-                .Variations(new JValue("fall"), new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("fall"), LdValue.Of("off"), LdValue.Of("on"))
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            testData.UsePreconfiguredFlag(flag);
 
             client.StringVariation("flag", user, "default");
 
-            Assert.Equal(1, eventSink.Events.Count);
-            var e = Assert.IsType<FeatureRequestEvent>(eventSink.Events[0]);
+            Assert.Single(eventSink.Events);
+            var e = Assert.IsType<EvaluationEvent>(eventSink.Events[0]);
             Assert.False(e.TrackEvents);
             Assert.Null(e.Reason);
         }
@@ -376,22 +315,22 @@ namespace LaunchDarkly.Tests
         [Fact]
         public void EventIsSentForExistingPrerequisiteFlag()
         {
-            var f0 = new FeatureFlagBuilder("feature0")
+            var f0 = new FeatureFlagBuilder("feature0").Version(1)
                 .On(true)
                 .Prerequisites(new Prerequisite("feature1", 1))
                 .Fallthrough(new VariationOrRollout(0, null))
                 .OffVariation(1)
-                .Variations(new JValue("fall"), new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("fall"), LdValue.Of("off"), LdValue.Of("on"))
                 .Version(1)
                 .Build();
-            var f1 = new FeatureFlagBuilder("feature1")
+            var f1 = new FeatureFlagBuilder("feature1").Version(1)
                 .On(true)
                 .Fallthrough(new VariationOrRollout(1, null))
-                .Variations(new JValue("nogo"), new JValue("go"))
+                .Variations(LdValue.Of("nogo"), LdValue.Of("go"))
                 .Version(2)
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, f0);
-            featureStore.Upsert(VersionedDataKind.Features, f1);
+            testData.UsePreconfiguredFlag(f0);
+            testData.UsePreconfiguredFlag(f1);
 
             client.StringVariation("feature0", user, "default");
 
@@ -403,61 +342,83 @@ namespace LaunchDarkly.Tests
         [Fact]
         public void EventIsSentWithDefaultValueForFlagThatEvaluatesToNull()
         {
-            var flag = new FeatureFlagBuilder("feature")
+            var flag = new FeatureFlagBuilder("feature").Version(1)
                 .On(false)
                 .OffVariation(null)
-                .Variations(new List<JToken> { new JValue("fall"), new JValue("off"), new JValue("on") })
+                .Variations(LdValue.Of("fall"), LdValue.Of("off"), LdValue.Of("on"))
                 .Version(1)
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, flag);
+            testData.UsePreconfiguredFlag(flag);
             var defaultVal = "default";
 
             var result = client.StringVariation(flag.Key, user, defaultVal);
             Assert.Equal(defaultVal, result);
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], flag, LdValue.Of(defaultVal), LdValue.Of(defaultVal), null);
         }
 
         [Fact]
         public void EventIsNotSentForUnknownPrerequisiteFlag()
         {
-            var f0 = new FeatureFlagBuilder("feature0")
+            var f0 = new FeatureFlagBuilder("feature0").Version(1)
                 .On(true)
                 .Prerequisites(new Prerequisite("feature1", 1))
                 .Fallthrough(new VariationOrRollout(0, null))
                 .OffVariation(1)
-                .Variations(new JValue("fall"), new JValue("off"), new JValue("on"))
+                .Variations(LdValue.Of("fall"), LdValue.Of("off"), LdValue.Of("on"))
                 .Version(1)
                 .Build();
-            featureStore.Upsert(VersionedDataKind.Features, f0);
+            testData.UsePreconfiguredFlag(f0);
 
             client.StringVariation("feature0", user, "default");
 
-            Assert.Equal(1, eventSink.Events.Count);
+            Assert.Single(eventSink.Events);
             CheckFeatureEvent(eventSink.Events[0], f0, LdValue.Of("off"), LdValue.Of("default"), null);
         }
 
-        private void CheckFeatureEvent(Event e, FeatureFlag flag, LdValue value, LdValue defaultVal, string prereqOf)
+        [Fact]
+        public void AliasSendsEvent()
         {
-            var fe = Assert.IsType<FeatureRequestEvent>(e);
-            Assert.Equal(flag.Key, fe.Key);
-            Assert.Equal(user.Key, fe.User.Key);
-            Assert.Equal(flag.Version, fe.Version);
-            Assert.Equal(value, fe.LdValue);
-            Assert.Equal(defaultVal, fe.LdValueDefault);
-            Assert.Equal(prereqOf, fe.PrereqOf);
+            client.Alias(User.WithKey("current"), User.Builder("previous").Anonymous(true).Build());
+
+            Assert.Single(eventSink.Events);
+            var e = Assert.IsType<AliasEvent>(eventSink.Events[0]);
+            Assert.Equal("current", e.CurrentKey);
+            Assert.Equal(ContextKind.User, e.CurrentKind);
+            Assert.Equal("previous", e.PreviousKey);
+            Assert.Equal(ContextKind.AnonymousUser, e.PreviousKind);
         }
 
-        private void CheckUnknownFeatureEvent(Event e, string key, LdValue defaultVal, string prereqOf)
+        [Fact]
+        public void AliasWithEmptyUserKeySendsNoEvent()
         {
-            var fe = Assert.IsType<FeatureRequestEvent>(e);
-            Assert.Equal(key, fe.Key);
+            client.Alias(User.WithKey(""), User.WithKey("previous"));
+            client.Alias(User.WithKey("current"), User.WithKey(""));
+
+            Assert.Empty(eventSink.Events);
+        }
+
+        private void CheckFeatureEvent(object e, FeatureFlag flag, LdValue value, LdValue defaultVal, string prereqOf)
+        {
+            var fe = Assert.IsType<EvaluationEvent>(e);
+            Assert.Equal(flag.Key, fe.FlagKey);
             Assert.Equal(user.Key, fe.User.Key);
-            Assert.Null(fe.Version);
-            Assert.Equal(defaultVal, fe.LdValue);
-            Assert.Equal(defaultVal, fe.LdValueDefault);
-            Assert.Equal(prereqOf, fe.PrereqOf);
+            Assert.Equal(flag.Version, fe.FlagVersion);
+            Assert.Equal(value, fe.Value);
+            Assert.Equal(defaultVal, fe.Default);
+            Assert.Equal(prereqOf, fe.PrerequisiteOf);
+        }
+
+        private void CheckUnknownFeatureEvent(object e, string key, LdValue defaultVal, string prereqOf)
+        {
+            var fe = Assert.IsType<EvaluationEvent>(e);
+            Assert.Equal(key, fe.FlagKey);
+            Assert.Equal(user.Key, fe.User.Key);
+            Assert.Null(fe.FlagVersion);
+            Assert.Equal(defaultVal, fe.Value);
+            Assert.Equal(defaultVal, fe.Default);
+            Assert.Equal(prereqOf, fe.PrerequisiteOf);
         }
     }
 }

@@ -1,6 +1,6 @@
 # Contributing to the LaunchDarkly Server-Side SDK for .NET
 
-LaunchDarkly has published an [SDK contributor's guide](https://docs.launchdarkly.com/docs/sdk-contributors-guide) that provides a detailed explanation of how our SDKs work. See below for additional information on how to contribute to this SDK.
+LaunchDarkly has published an [SDK contributor's guide](https://docs.launchdarkly.com/sdk/concepts/contributors-guide) that provides a detailed explanation of how our SDKs work. See below for additional information on how to contribute to this SDK.
 
 ## Submitting bug reports and feature requests
 
@@ -9,13 +9,20 @@ The LaunchDarkly SDK team monitors the [issue tracker](https://github.com/launch
 ## Submitting pull requests
  
 We encourage pull requests and other contributions from the community. Before submitting pull requests, ensure that all temporary or unintended code is removed. Don't worry about adding reviewers to the pull request; the LaunchDarkly SDK team will add themselves. The SDK team will acknowledge all pull requests within two business days.
- 
+
 ## Build instructions
  
 ### Prerequisites
 
-To set up your SDK build time environment, you must [download .NET Core and follow the instructions](https://dotnet.microsoft.com/download) (make sure you have 1.0.4 or higher).
- 
+To set up your SDK build time environment, you must [download .NET development tools and follow the instructions](https://dotnet.microsoft.com/download). .NET 5.0 is preferred, since the .NET 5.0 tools are able to build for all supported target platforms.
+
+This SDK shares part of its implementation and public API with the [Xamarin SDK](https://github.com/launchdarkly/xamarin-client-sdk). The shared code is in two other packages:
+
+* `LaunchDarkly.CommonSdk` (in [`launchdarkly/dotnet-sdk-common`](https://github.com/launchdarkly/dotnet-sdk-common): Types such as `User` that are part of the SDK's public API, but are not specific to server-side or client-side use.
+* `LaunchDarkly.InternalSdk` (in [`launchdarkly/dotnet-sdk-internal`](https://github.com/launchdarkly/dotnet-sdk-internal): Support code that is not part of the SDK's public API, such as the implementation of analytics event processing. These types are public in order to be usable from outside of their assembly, but they are not included in the SDK's public API or documentation.
+
+Other support code is in the packages [`LaunchDarkly.EventSource`](https://github.com/launchdarkly/dotnet-eventsource), [`LaunchDarkly.JsonStream`](https://github.com/launchdarkly/dotnet-jsonstream), and [`LaunchDarkly.Logging`](https://github.com/launchdarkly/dotnet-logging).
+
 ### Building
  
 To install all required packages:
@@ -24,12 +31,18 @@ To install all required packages:
 dotnet restore
 ```
 
-Then, to build the SDK without running any tests:
+Then, to build the SDK for all target frameworks:
 
 ```
-dotnet build src/LaunchDarkly.ServerSdk -f netstandard1.4
+dotnet build src/LaunchDarkly.ServerSdk
 ```
- 
+
+Or, to build for only one target framework (in this example, .NET Standard 2.0):
+
+```
+dotnet build src/LaunchDarkly.ServerSdk -f netstandard2.0
+```
+
 ### Testing
  
 To run all unit tests:
@@ -38,6 +51,10 @@ To run all unit tests:
 dotnet test test/LaunchDarkly.ServerSdk.Tests/LaunchDarkly.ServerSdk.Tests.csproj
 ```
 
-## Miscellaneous
+Note that the unit tests can only be run in Debug configuration. There is an `InternalsVisibleTo` directive that allows the test code to access internal members of the library, and assembly strong-naming in the Release configuration interferes with this.
 
-Much of the implementation of this SDK is shared with the LaunchDarkly Xamarin SDK. The common code that is used by both is in the `LaunchDarkly.CommonSdk` package, whose source code is in the [`dotnet-sdk-common`](https://github.com/launchdarkly/dotnet-sdk-common) repository.
+## Documentation in code
+
+All public types, methods, and properties should have documentation comments in the standard C# XML comment format. These will be automatically included in the [HTML documentation](https://launchdarkly.github.io/dotnet-server-sdk) that is generated on release; this process also uses additional Markdown content from the `docs-src/` subdirectory.
+
+See [`docs-src/README.md`](./docs-src/README.md) for more details.

@@ -2,6 +2,150 @@
 
 All notable changes to the LaunchDarkly .NET Server-Side SDK will be documented in this file. This project adheres to [Semantic Versioning](http://semver.org).
 
+## [6.3.1] - 2021-10-28
+### Fixed:
+- The `HttpConfigurationBuilder` methods `Proxy` and `ConnectTimeout` were not working correctly: they were being applied to polling requests and analytics event posts, but not streaming requests. Now they apply to all requests. ([#148](https://github.com/launchdarkly/dotnet-server-sdk/issues/148))
+
+## [6.3.0] - 2021-10-25
+### Added:
+- `ConfigurationBuilder.ServiceEndpoints` provides a simpler way of setting custom service base URIs, if you are connecting to a LaunchDarkly Relay Proxy instance, a private LaunchDarkly instance, or a test fixture. Previously, this required setting a `BaseURI` property for each individual service (streaming, events, etc.). If using the Relay Proxy, simply remove any `BaseURI` calls in your SDK configuration and call `ServiceEndpoints(Components.ServiceEndpoints().RelayProxy(myRelayProxyUri))` on the `IConfigurationBuilder`.
+- Convenience methods for working with JSON object and array values: `LdValue.Dictionary`, `LdValue.List`, `LdValue.ObjectBuilder.Set`, `LdValue.ObjectBuilder.Remove`, and `LdValue.ObjectBuilder.Copy`.
+
+### Fixed:
+- When using the adapter that allows SDK types to be deserialized with the `System.Text.Json` API, temporary `JsonDocument` instances are now disposed of immediately rather than leaving them to be garbage-collected. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-jsonstream/pull/8)!)
+
+### Deprecated:
+- `StreamingDataSourceBuilder.BaseURI`, `PollingDataSourceBuilder.BaseURI`, and `EventProcessorBuilder.BaseURI`. The preferred way to set these is now with `ConfigurationBuilder.ServiceEndpoints`.
+
+## [6.2.2] - 2021-10-06
+There are no functional changes in the SDK in this release; its only purpose is to address the version conflict issue mentioned below.
+
+### Fixed:
+- Fixed conflicting dependency versions that existed in several LaunchDarkly packages. In .NET Core these would be resolved automatically, but in .NET Framework they could result in runtime assembly loading errors for `LaunchDarkly.CommonSdk`, `LaunchDarkly.Logging`, or `System.Collections.Immutable`, unless binding redirects were used. Note that it may still be necessary to use a binding redirect if your application (or one of its dependencies) relies on an assembly that is also used by the SDK with a different version.
+
+## [6.2.1] - 2021-09-28
+### Changed:
+- When event handlers are called for events such as `IFlagTracker.FlagChanged`, the `sender` parameter will be the `LdClient` instance that generated the event. Previously, `sender` was being set to one of several internal components that were not useful to application code.
+
+### Fixed:
+- When using [`IFlagTracker`](https://launchdarkly.github.io/dotnet-server-sdk/api/LaunchDarkly.Sdk.Server.Interfaces.IFlagTracker.html), flag change events would not fire if the data source was [`FileData`](https://launchdarkly.github.io/dotnet-server-sdk/api/LaunchDarkly.Sdk.Server.Integrations.FileData.html) and there was a change in the test data file(s). Now, any change to the test data will cause a flag change event to fire for every flag. ([#144](https://github.com/launchdarkly/dotnet-server-sdk/issues/144))
+- A race condition could cause `IDataSourceStatusProvider.WaitFor` to wait indefinitely or time out even if the desired status was found.
+
+## [6.2.0] - 2021-07-22
+### Added:
+- The SDK now supports evaluation of Big Segments. An Early Access Program for creating and syncing Big Segments from customer data platforms is available to enterprise customers.
+
+## [6.1.0] - 2021-06-22
+### Added:
+- The SDK now supports the ability to control the proportion of traffic allocation to an experiment. This works in conjunction with a new platform feature now available to early access customers.
+
+## [6.0.0] - 2021-06-09
+This is a major rewrite that introduces a cleaner API design, adds new features, and makes the SDK code easier to maintain and extend. See the [.NET 5.x to 6.0 migration guide](https://docs.launchdarkly.com/sdk/server-side/dotnet/migration-5-to-6) for an in-depth look at the changes in 6.0.0; the following is a summary.
+
+### Added:
+- You can tell the SDK to notify you whenever a feature flag&#39;s configuration has changed (either in general, or in terms of its result for a specific user), using `LdClient.FlagTracker`.
+- You can monitor the status of the SDK&#39;s data source (which normally means the streaming connection to the LaunchDarkly service) with `LdClient.DataSourceStatusProvider`. This allows you to check the current connection status, and to be notified if this status changes.
+- You can monitor the status of a persistent data store with `LdClient.DataStoreStatusProvider`. This allows you to check whether database updates are succeeding, or to be notified if this status changes.
+- The `TestData` class in `LaunchDarkly.Sdk.Server.Integrations` is a new way to inject feature flag data programmatically into the SDK for testing—either with fixed values for each flag, or with targets and/or rules that can return different values for different users. Unlike `FileData`, this mechanism does not use any external resources, only the data that your test code has provided.
+- `HttpConfigurationBuilder.Proxy` allows you to specify an HTTP/HTTPS proxy server programmatically, rather than using .NET&#39;s `HTTPS_PROXY` environment variable. That was already possibly to do by specifying an `HttpClientHandler` that had a proxy; this is a shortcut for the same thing.
+- `HttpConfigurationBuilder.CustomHeader` allows you to specify custom HTTP headers that should be added to every HTTP/HTTPS request made by the SDK.
+- `HttpConfigurationBuilder.ResponseStartTimeout` sets the timeout interval for &#34;start of request until beginning of server response&#34;, which .NET represents as `System.Net.HttpClient.Timeout`. The SDK previously referred to this as `ConnectTimeout`, but it was not a real connection timeout in the sense that most TCP/IP frameworks use the term, so the new name more clearly defines the behavior.
+- There is now a `DoubleVariation` method for getting a numeric flag value as the `double` type (as opposed to `FloatVariation` which returns a `float`).
+- The `Alias` method of `LdClient` can be used to associate two user objects for analytics purposes with an alias event.
+- `ConfigurationBuilder.Logging` is a new configuration category for options related to logging. This includes a new mechanism for specifying where log output should be sent, instead of using the `Common.Logging` framework to configure this.
+- `LoggingConfigurationBuilder.LogDataSourceOutageAsErrorAfter` controls the new connection failure logging behavior described below under &#34;behavioral changes&#34;.
+- The `LaunchDarkly.Sdk.Json` namespace provides methods for converting types like `User` and `FeatureFlagsState` to and from JSON.
+- The `LaunchDarkly.Sdk.UserAttribute` type provides a less error-prone way to refer to user attribute names in configuration, and can also be used to get an arbitrary attribute from a user.
+- The `LaunchDarkly.Sdk.UnixMillisecondTime` type provides convenience methods for converting to and from the Unix epoch millisecond time format that LaunchDarkly uses for all timestamp values.
+ 
+### Changed (requirements/dependencies/build):
+- The SDK&#39;s build targets are now .NET Standard 2.0, .NET Core 2.1, .NET Framework 4.5.2, .NET Framework 4.7.1, and .NET 5.0. This means it can be used in applications that run on .NET Core 2.1 and above, .NET Framework 4.5.2 and above, .NET 5.0 and above, or in a portable library that is targeted to .NET Standard 2.0 and above.
+- The SDK no longer has a dependency on `Common.Logging`. Instead, it uses a similar but simpler logging facade, the [`LaunchDarkly.Logging`](https://launchdarkly.github.io/dotnet-logging/) package, which has adapters for various logging destinations (including one for `Common.Logging`, if you want to keep an existing configuration that uses that framework).
+- The SDK no longer has a dependency on `Newtonsoft.Json`. It uses the `System.Text.Json` API internally on platforms where that is available; on others, such as .NET Framework 4.5.x, it uses a lightweight custom implementation. This removes the potential for dependency version conflicts in applications that use `Newtonsoft.Json` for their own purposes. Converting data types like `User` and `LdValue` to and from JSON with `System.Text.Json` will always work; converting them with `Newtonsoft.Json` requires an extra package, [`LaunchDarkly.CommonSdk.JsonNet`](https://github.com/launchdarkly/dotnet-sdk-common/tree/master/src/LaunchDarkly.CommonSdk.JsonNet).
+- The SDK&#39;s dependencies for its own implementation details are now `LaunchDarkly.CommonSdk`, `LaunchDarkly.EventSource`, `LaunchDarkly.InternalSdk`, and `LaunchDarkly.JsonStream`. You should not need to reference these assemblies directly, as they are loaded automatically when you install the main NuGet package `LaunchDarkly.ServerSdk`. Previously there was also a variant called `LaunchDarkly.CommonSdk.StrongName` that was used by the release build of the SDK, but that has been removed.
+ 
+### Changed (API changes):
+- The base namespace has changed: types that were previously in `LaunchDarkly.Client` are now in either `LaunchDarkly.Sdk` or `LaunchDarkly.Sdk.Server`. The `LaunchDarkly.Sdk` namespace contains types that are not specific to the _server-side_ .NET SDK (that is, they will also be used by the Xamarin SDK): `EvaluationDetail`, `LdValue`, `User`, and `UserBuilder`. Types that are specific to the server-side .NET SDK, such as `Configuration` and `LdClient`, are in `LaunchDarkly.Sdk.Server`.
+- Many properties have been moved out of `ConfigurationBuilder`, into sub-builders that are specific to one area of functionality (such as streaming, or analytics events). See `ConfigurationBuilder` and `Components`.
+- `User` and `Configuration` objects are now immutable. To specify properties for these classes, you must now use `User.Builder` and `Configuration.Builder`.
+- The following things now use the type `LdValue` instead of `JToken`: custom attribute values in `User.Custom`; JSON flag variations returned by `JsonVariation`, `JsonVariationDetail`, and `AllFlags`; the optional data parameter of `LdClient.Track`.
+- `EvaluationReason` is now a single struct type rather than a base class.
+- `LaunchDarkly.Client.Files.FileComponents` has been moved to `LaunchDarkly.Sdk.Server.Integrations.FileData`.
+- `LdClient.Initialized` is now a read-only property rather than a method.
+- Interfaces for creating custom components, such as `IFeatureStore`, now have a new namespace (`LaunchDarkly.Sdk.Server.Interfaces`), new names, and somewhat different semantics due to changes in the SDK&#39;s internal architecture. Any existing custom component implementations will need to be revised to work with .NET SDK 5.x.
+- The `ILdClient` interface is now in `LaunchDarkly.Sdk.Server.Interfaces` instead of the main namespace.
+- The `IConfigurationBuilder` interface has been replaced by the concrete class `ConfigurationBuilder`.
+
+### Changed (behavioral changes):
+- In streaming mode, the SDK will now drop and restart the stream connection if either 1. it receives malformed data (indicating that some data may have been lost before reaching the application) or 2. you are using a database integration (a persistent data store) and a database error happens while trying to store the received data. In both cases, the intention is to make sure updates from LaunchDarkly are not lost; restarting the connection causes LaunchDarkly to re-send the entire flag data set. This makes the .NET SDK&#39;s behavior consistent with other LaunchDarkly server-side SDKs.
+- However, if you have set the caching behavior to &#34;cache forever&#34; (see `PersistentDataStoreConfiguration`), the stream will _not_ restart after a database error; instead, all updates will still be accumulated in the cache, and will be written to the database automatically if the database becomes available again.
+- Logging now uses a simpler, more stable set of logger names instead of using the names of specific implementation classes that are subject to change. General messages are logged under `LaunchDarkly.Sdk.Server.LdClient`, while messages about specific areas of functionality are logged under that name plus `.DataSource` (streaming, polling, file data, etc.), `.DataStore` (database integrations), `.Evaluation` (unexpected errors during flag evaluations), or `.Events` (analytics event processing).
+- Network failures and server errors for streaming or polling requests were previously logged at `Error` level in most cases but sometimes at `Warn` level. They are now all at `Warn` level, but with a new behavior: if connection failures continue without a successful retry for a certain amount of time, the SDK will log a special `Error`-level message to warn you that this is not just a brief outage. The amount of time is one minute by default, but can be changed with the new `LogDataSourceOutageAsErrorAfter` option in `LoggingConfigurationBuilder`.
+- Many internal methods have been rewritten to reduce the number of heap allocations in general.
+- Evaluation of rules involving regex matches, date/time values, and semantic versions, has been sped up by pre-parsing the values in the rules.
+- Evaluation of rules involving an equality match to multiple values (such as &#34;name is one of X, Y, Z&#34;) has been sped up by converting the list of values to a set.
+- If analytics events are disabled with `Components.NoEvents`, the SDK now avoids generating any analytics event objects internally. Previously they were created and then discarded, causing unnecessary heap churn.
+- When accessing a floating-point flag value with `IntVariation`, it will now truncate (round toward zero) rather than rounding to the nearest integer. This is consistent with normal C# behavior and with most other LaunchDarkly SDKs.
+- `HttpConfigurationBuilder.ConnectTimeout` now sets the timeout for making a network connection, so it is consistent with what is called a connection timeout in other LaunchDarkly SDKs and in most networking libraries. It only has an effect in .NET Core 2.1&#43; and .NET 5.0&#43;; other .NET platforms do not support this kind of timeout.
+
+### Fixed:
+- The default value for `ConfigurationBuilder.StartWaitTime` was documented as being 5 seconds, but the actual value was 10 seconds. It is now really 5 seconds, consistent with other LaunchDarkly server-side SDKs.
+- If an unexpected exception occurred while evaluating one clause in a flag rule, the SDK was simply ignoring the clause. For consistency with the other SDKs, it now treats this as a failed evaluation.
+ 
+### Removed:
+- All types and methods that were deprecated as of the last .NET SDK 5.x release have been removed. This includes many `ConfigurationBuilder` methods, which have been replaced by the modular configuration syntax that was already added in the 5.14.0 release. See the migration guide for details on how to update your configuration code if you were using the older syntax.
+
+## [5.14.2] - 2021-03-24
+### Fixed:
+- Setting a custom base URI to use instead of the regular LaunchDarkly service endpoints did not work correctly if the base URI included a path prefix, as it might if for instance you were using a reverse proxy that would forward requests from `http://my-proxy/launchdarkly-stream/some-endpoint-path` to `https://stream.launchdarkly.com/some-endpoint-path`. In this example, the `/launchdarkly-stream` part was being dropped from the request URL, preventing this type of proxy configuration from working. Now the base path will always be preserved.
+
+## [5.14.1] - 2021-03-03
+### Fixed:
+- The long-running task that the SDK uses to process analytics events was being created in a way that could unnecessarily reduce availability of the managed thread pool, potentially causing unexpected delays in asynchronous task scheduling elsewhere in an application.
+
+## [5.14.0] - 2021-01-26
+The purpose of this release is to introduce newer APIs for configuring the SDK, corresponding to how configuration will work in the upcoming 6.0 release. These are very similar to the configuration APIs in the recent 5.x releases of the LaunchDarkly server-side Java and Go SDKs.
+
+The corresponding older APIs are now deprecated. If you update to this release, you will see deprecation warnings where you have used them, but they will still work. This should make it easier to migrate your code to the newer APIs, in order to be ready to update to the 6.0 release in the future without drastic changes. For details, see below, and also see the [API documentation for `IConfigurationBuilder`](http://launchdarkly.github.io/dotnet-server-sdk/html/T_LaunchDarkly_Client_IConfigurationBuilder.htm).
+
+Other than the configuration methods, there are no changes to SDK functionality in this release.
+
+### Added:
+- Previously, most configuration options were set by setter methods in `IConfigurationBuilder`. These are being superseded by builders that are specific to one area of functionality: for instance, [`Components.StreamingDataSource()`](http://launchdarkly.github.io/dotnet-server-sdk/html/M_LaunchDarkly_Client_Components_StreamingDataSource.htm) and [`Components.PollingDataSource()`](http://launchdarkly.github.io/dotnet-server-sdk/html/M_LaunchDarkly_Client_Components_PollingDataSource.htm) provide builders/factories that have options specific to streaming or polling, the SDK's many options related to analytics events are now in a builder returned by [`Components.SendEvents()`](http://launchdarkly.github.io/dotnet-server-sdk/html/M_LaunchDarkly_Client_Components_SendEvents.htm), and HTTP-related options such as `ConnectTimeout` are now in a builder returned by [`Components.HttpConfiguration()`](http://launchdarkly.github.io/dotnet-server-sdk/html/M_LaunchDarkly_Client_Components_HttpConfiguration.htm). Using this newer API makes it clearer which options are for what, and makes it impossible to write contradictory configurations like `.IsStreamingEnabled(false).StreamUri(someUri)`.
+- There is a new API for specifying a persistent data store (usually a database integration). This is now done using the new method `Components.PersistentDataStore` and one of the new integration factories in the namespace `Launchdarkly.Client.Integrations`. The next releases of the integration packages for [Redis](https://github.com/launchdarkly/dotnet-server-sdk-redis), [Consul](https://github.com/launchdarkly/dotnet-server-sdk-consul), and [DynamoDB](https://github.com/launchdarkly/dotnet-server-sdk-dynamodb) will use these semantics.
+
+### Changed:
+- The components "feature store" and "update processor" are being renamed to "data store" and "data source". The interfaces for these are still called `IFeatureStore` and `IUpdateProcessor` for backward compatibility, but the newer configuration methods use the new names. The interfaces will be renamed in the next major version.
+- In the newer API, the mode formerly named "LDD" (LaunchDarkly daemon), where the SDK [reads feature flags from a database](https://docs.launchdarkly.com/sdk/concepts/feature-store#using-a-persistent-feature-store-without-connecting-to-launchdarkly) that is populated by the LaunchDarkly Relay Proxy or some other process, has been renamed to [`ExternalUpdatesOnly`](http://launchdarkly.github.io/dotnet-server-sdk/html/P_LaunchDarkly_Client_Components_ExternalUpdatesOnly.htm). It is now an option for the [`DataSource`](http://launchdarkly.github.io/dotnet-server-sdk/html/M_LaunchDarkly_Client_IConfigurationBuilder_DataSource.htm) configuration method.
+
+### Deprecated:
+- In `IConfigurationBuilder`: all methods for setting individual properties related to streaming, polling, events, and HTTP configuration; also, the `UseLdd` option (see above).
+- In `Components`: `DefaultEventProcessor`, `DefaultUpdateProcessor`, `InMemoryFeatureStore`, `NullEventProcessor`, `NullUpdateProcessor`. Replacements for these are described in the API documentation.
+
+## [5.13.1] - 2020-11-05
+### Changed:
+- Updated the `LaunchDarkly.EventSource` dependency to a version that has a specific target for .NET Standard 2.0. Previously, that package targeted only .NET Standard 1.4 and .NET Framework 4.5. There is no functional difference between these targets, but .NET Core application developers may wish to avoid linking to any .NET Standard 1.x assemblies on general principle.
+
+## [5.13.0] - 2020-02-10
+Note: if you are using the LaunchDarkly Relay Proxy to forward events, update the Relay to version 5.10.0 or later before updating to this .NET SDK version.
+
+### Added:
+- The SDK now periodically sends diagnostic data to LaunchDarkly, describing the version and configuration of the SDK, the architecture and version of the runtime platform, and performance statistics. No credentials, hostnames, or other identifiable values are included. This behavior can be disabled with `IConfigurationBuilder.DiagnosticOptOut` or configured with `IConfigurationBuilder.DiagnosticRecordingInterval`.
+- With the file data source, it is now possible to customize the logic for reading a file in case there are special OS considerations. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-server-sdk/pull/127)!)
+
+### Fixed:
+- The SDK now specifies a uniquely identifiable request header when sending events to LaunchDarkly to ensure that events are only processed once, even if the SDK sends them two times due to a failed initial attempt.
+
+## [5.12.0] - 2020-01-06
+### Added:
+- `IUserBuilder.Secondary` is a new name for `SecondaryKey` (for consistency with other SDKs), and allows you to make the `secondary` attribute private.
+- `User.Secondary` (same as `SecondaryKey`).
+- `FeatureFlagsState` now has a `Builder` method for constructing a new instance (useful in testing). ([#125](https://github.com/launchdarkly/dotnet-server-sdk/issues/125))
+
+### Deprecated:
+- `IUserBuilder.SecondaryKey`, `User.SecondaryKey`.
+
+
 ## [5.11.0] - 2019-12-13
 ### Added:
 - With `FileDataSourceFactory`, it is now possible to specify that duplicate flag keys in data files should be ignored rather than causing an error; in this mode, it will use only the first occurrence of each flag key. This allows, for instance, implementing rolling updates of flag data by putting the newest data in a file that is specified first in your file list. (Thanks, [JeffAshton](https://github.com/launchdarkly/dotnet-server-sdk/pull/123)!)
@@ -172,7 +316,7 @@ The NuGet package name and assembly name will also change. In the 5.6.3 release,
 
 ## [5.2.0] - 2018-07-27
 ### Added:
-- New configuration property `UseLdd` allows the client to use the "LaunchDarkly Daemon", i.e. getting feature flag data from a store that is updated by an [`ld-relay`](https://docs.launchdarkly.com/docs/the-relay-proxy) instance. However, this will not be usable until the Redis feature store integration is released (soon).
+- New configuration property `UseLdd` allows the client to use the "LaunchDarkly Daemon", i.e. getting feature flag data from a store that is updated by an [`ld-relay`](https://docs.launchdarkly.com/home/relay-proxy) instance. However, this will not be usable until the Redis feature store integration is released (soon).
 
 ### Changed:
 - If you attempt to evaluate a flag before the client has established a connection, but you are using a feature store that has already been populated, the client will now use the last known values from the store instead of returning default values.
@@ -204,7 +348,7 @@ The NuGet package name and assembly name will also change. In the 5.6.3 release,
 ## [5.0.0] - 2018-05-10
 
 ### Changed:
-- To reduce the network bandwidth used for analytics events, feature request events are now sent as counters rather than individual events, and user details are now sent only at intervals rather than in each event. These behaviors can be modified through the LaunchDarkly UI and with the new configuration option `InlineUsersInEvents`. For more details, see [Analytics Data Stream Reference](https://docs.launchdarkly.com/v2.0/docs/analytics-data-stream-reference).
+- To reduce the network bandwidth used for analytics events, feature request events are now sent as counters rather than individual events, and user details are now sent only at intervals rather than in each event. These behaviors can be modified through the LaunchDarkly UI and with the new configuration option `InlineUsersInEvents`.
 - The `IStoreEvents` interface has been renamed to `IEventProcessor`, has slightly different methods, and includes `IDisposable`. Also, the properties of the `Event` classes have changed. This will only affect developers who created their own implementation of `IStoreEvents`.
 
 ### Added:
@@ -255,7 +399,7 @@ The NuGet package name and assembly name will also change. In the 5.6.3 release,
 
 ## [3.5.0] - 2018-01-29
 ### Added
-- Support for specifying [private user attributes](https://docs.launchdarkly.com/docs/private-user-attributes) in order to prevent user attributes from being sent in analytics events back to LaunchDarkly. See the `AllAttributesPrivate` and `PrivateAttributeNames` methods on `Configuration` as well as the `AndPrivateX` methods on `User`.
+- Support for specifying [private user attributes](https://docs.launchdarkly.com/home/users/attributes#creating-private-user-attributes) in order to prevent user attributes from being sent in analytics events back to LaunchDarkly. See the `AllAttributesPrivate` and `PrivateAttributeNames` methods on `Configuration` as well as the `AndPrivateX` methods on `User`.
 
 ### Changed
 - The stream connection will now restart when a large feature flag update fails repeatedly to ensure that the client is using most recent flag values.
@@ -353,7 +497,7 @@ The NuGet package name and assembly name will also change. In the 5.6.3 release,
 ### Added
 - Support for multivariate feature flags. New methods `StringVariation`, `JsonVariation` and `IntVariation` and `FloatVariation` for multivariates.
 - New `AllFlags` method returns all flag values for a specified user.
-- New `SecureModeHash` function computes a hash suitable for the new LaunchDarkly [JavaScript client's secure mode feature](https://docs.launchdarkly.com/docs/js-sdk-reference#section-secure-mode).
+- New `SecureModeHash` function computes a hash suitable for the new LaunchDarkly [JavaScript client's secure mode feature](https://docs.launchdarkly.com/sdk/features/secure-mode#configuring-secure-mode-in-the-javascript-client-side-sdk).
 
 ### Changed
 - LdClient now implements a new interface: ILdClient

@@ -1,158 +1,115 @@
-﻿using System.Collections.Generic;
-using LaunchDarkly.Client;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using LaunchDarkly.Logging;
+using LaunchDarkly.Sdk.Server.Interfaces;
+using LaunchDarkly.Sdk.Server.Internal.Model;
+using LaunchDarkly.TestHelpers;
 using System.Threading.Tasks;
-using Xunit;
 
-namespace LaunchDarkly.Tests
+using static LaunchDarkly.Sdk.Server.Interfaces.DataStoreTypes;
+
+namespace LaunchDarkly.Sdk.Server
 {
     public class TestUtils
     {
-        public static void AssertJsonEqual(JToken expected, JToken actual)
+        public static readonly Logger NullLogger = Logs.None.Logger("");
+
+#pragma warning disable 1998
+        public static async Task CompletedTask() { } // Task.CompletedTask isn't supported in .NET Framework 4.5.x
+#pragma warning restore 1998
+
+        public static string TestFilePath(string name) => "./TestFiles/" + name;
+
+        internal static ItemDescriptor DescriptorOf(FeatureFlag item) => new ItemDescriptor(item.Version, item);
+
+        internal static ItemDescriptor DescriptorOf(Segment item) => new ItemDescriptor(item.Version, item);
+
+        internal static bool UpsertFlag(IDataStore store, FeatureFlag item) =>
+            store.Upsert(DataModel.Features, item.Key, DescriptorOf(item));
+
+        internal static bool UpsertSegment(IDataStore store, Segment item) =>
+            store.Upsert(DataModel.Segments, item.Key, DescriptorOf(item));
+
+        internal static string MakeStreamPutEvent(string flagsData) =>
+            "event: put\ndata: {\"data\":" + flagsData + "}\n\n";
+
+        internal static string MakeFlagsData(params FeatureFlag[] flags)
         {
-            if (!JToken.DeepEquals(expected, actual))
+            var flagsBuilder = LdValue.BuildObject();
+            foreach (var flag in flags)
             {
-                Assert.True(false,
-                    string.Format("JSON result mismatch; expected {0}, got {1}",
-                        JsonConvert.SerializeObject(expected),
-                        JsonConvert.SerializeObject(actual)));
+                flagsBuilder.Add(flag.Key, LdValue.Parse(DataModel.Features.Serialize(DescriptorOf(flag))));
             }
+            return LdValue.BuildObject()
+                    .Add("flags", flagsBuilder.Build())
+                    .Add("segments", LdValue.BuildObject().Build())
+                    .Build().ToJsonString();
         }
 
-        public static string TestFilePath(string name)
-        {
-            return "./TestFiles/" + name;
-        }
+        // Ensures that a data set is sorted by namespace and then by key
+        internal static FullDataSet<ItemDescriptor> NormalizeDataSet(FullDataSet<ItemDescriptor> data) =>
+            new FullDataSet<ItemDescriptor>(
+                data.Data.OrderBy(kindAndItems => kindAndItems.Key.Name)
+                    .Select(kindAndItems => new KeyValuePair<DataKind, KeyedItems<ItemDescriptor>>(
+                        kindAndItems.Key,
+                        new KeyedItems<ItemDescriptor>(
+                            kindAndItems.Value.Items.OrderBy(keyAndItem => keyAndItem.Key)
+                            )
+                        )
+                    )
+                );
 
-        // this just lets us avoid deprecation warnings
-        public static InMemoryFeatureStore InMemoryFeatureStore()
+        internal static JsonTestValue DataSetAsJson(FullDataSet<ItemDescriptor> data)
         {
-#pragma warning disable 0618
-            return new InMemoryFeatureStore();
-#pragma warning restore 0618
-        }
-
-        public static IFeatureStoreFactory SpecificFeatureStore(IFeatureStore store)
-        {
-            return new SpecificFeatureStoreFactory(store);
-        }
-
-        public static IEventProcessorFactory SpecificEventProcessor(IEventProcessor ep)
-        {
-            return new SpecificEventProcessorFactory(ep);
-        }
-
-        public static IUpdateProcessorFactory SpecificUpdateProcessor(IUpdateProcessor up)
-        {
-            return new SpecificUpdateProcessorFactory(up);
-        }
-
-        public static IUpdateProcessorFactory UpdateProcessorWithData(
-            IDictionary<IVersionedDataKind, IDictionary<string, IVersionedData>> data)
-        {
-            return new UpdateProcessorFactoryWithData(data);
+            var ob0 = LdValue.BuildObject();
+            foreach (var kv0 in data.Data)
+            {
+                var ob1 = LdValue.BuildObject();
+                foreach (var kv1 in kv0.Value.Items)
+                {
+                    ob1.Add(kv1.Key, LdValue.Parse(kv0.Key.Serialize(kv1.Value)));
+                }
+                ob0.Add(kv0.Key.Name, ob1.Build());
+            }
+            return JsonTestValue.JsonOf(ob0.Build().ToJsonString());
         }
     }
 
-    public class SpecificFeatureStoreFactory : IFeatureStoreFactory
+    public class TempFile : IDisposable
     {
-        private readonly IFeatureStore _store;
+        public string Path { get; }
 
-        public SpecificFeatureStoreFactory(IFeatureStore store)
+        public static TempFile Create() => new TempFile();
+
+        public static string MakePathOfNonexistentFile()
         {
-            _store = store;
+            var path = System.IO.Path.GetTempFileName();
+            File.Delete(path);
+            return path;
         }
 
-        IFeatureStore IFeatureStoreFactory.CreateFeatureStore()
+        private TempFile()
         {
-            return _store;
-        }
-    }
-
-    public class SpecificEventProcessorFactory : IEventProcessorFactory
-    {
-        private readonly IEventProcessor _ep;
-
-        public SpecificEventProcessorFactory(IEventProcessor ep)
-        {
-            _ep = ep;
+            this.Path = System.IO.Path.GetTempFileName();
         }
 
-        IEventProcessor IEventProcessorFactory.CreateEventProcessor(Configuration config)
+        public void SetContent(string text) =>
+            File.WriteAllText(Path, text);
+
+        public void SetContentFromPath(string path) =>
+            SetContent(File.ReadAllText(path));
+
+        public void Delete() => File.Delete(Path);
+
+        public void Dispose()
         {
-            return _ep;
+            try
+            {
+                Delete();
+            }
+            catch { }
         }
-    }
-
-    public class SpecificUpdateProcessorFactory : IUpdateProcessorFactory
-    {
-        private readonly IUpdateProcessor _up;
-
-        public SpecificUpdateProcessorFactory(IUpdateProcessor up)
-        {
-            _up = up;
-        }
-
-        IUpdateProcessor IUpdateProcessorFactory.CreateUpdateProcessor(Configuration config, IFeatureStore featureStore)
-        {
-            return _up;
-        }
-    }
-
-    public class UpdateProcessorFactoryWithData : IUpdateProcessorFactory
-    {
-        private readonly IDictionary<IVersionedDataKind, IDictionary<string, IVersionedData>> _data;
-
-        public UpdateProcessorFactoryWithData(
-            IDictionary<IVersionedDataKind, IDictionary<string, IVersionedData>> data)
-        {
-            _data = data;
-        }
-
-        public IUpdateProcessor CreateUpdateProcessor(Configuration config, IFeatureStore featureStore)
-        {
-            return new UpdateProcessorWithData(featureStore, _data);
-        }
-    }
-
-    public class UpdateProcessorWithData : IUpdateProcessor
-    {
-        private readonly IFeatureStore _store;
-        private readonly IDictionary<IVersionedDataKind, IDictionary<string, IVersionedData>> _data;
-
-        public UpdateProcessorWithData(IFeatureStore store,
-            IDictionary<IVersionedDataKind, IDictionary<string, IVersionedData>> data)
-        {
-            _store = store;
-            _data = data;
-        }
-
-        public Task<bool> Start()
-        {
-            _store.Init(_data);
-            return Task.FromResult(true);
-        }
-
-        public bool Initialized()
-        {
-            return true;
-        }
-        
-        public void Dispose() { }
-    }
-
-    public class TestEventProcessor : IEventProcessor
-    {
-        public List<Event> Events = new List<Event>();
-
-        public void SendEvent(Event e)
-        {
-            Events.Add(e);
-        }
-
-        public void Flush() { }
-
-        public void Dispose() { }
     }
 }
